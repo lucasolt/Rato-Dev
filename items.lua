@@ -279,7 +279,23 @@ return {
 		'ReloadAP', 4000,
 	}),
 	PlaceObj('ModItemCode', {
+		'name', "Script3",
+		'CodeFileName', "Code/Script3.lua",
+	}),
+	PlaceObj('ModItemCode', {
 		'name', "Script2",
 		'CodeFileName', "Code/Script2.lua",
 	}),
+	PlaceObj('ModItemFolder', {
+		'name', "IA Debug Tools",
+	}, {
+		PlaceObj('ModItemCode', {
+			'name', "RATODBG_AIDebugUI",
+			'CodeFileName', "Code/RATODBG_AIDebugUI.lua",
+		}),
+		PlaceObj('ModItemCode', {
+			'name', "RATOTEL_AITelemetry",
+			'CodeFileName', "Code/RATOTEL_AITelemetry.lua",
+		}),
+		}),
 }

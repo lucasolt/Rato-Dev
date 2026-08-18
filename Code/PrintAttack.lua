@@ -1,4 +1,4 @@
-local debug = true
+local debug = false
 last_results = false
 
 last_combat = {}
