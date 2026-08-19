@@ -15,23 +15,71 @@
 -- PARAMETROS  (tudo local; edite aqui e recarregue o mod)
 ---------------------------------------------------------------------------------------------------
 
----- gradiente do pior para o melhor (indice 1 = zero / sem valor)
-local RAMP = {
-    RGB(120, 120, 130),
-    RGB(210, 55, 45),
-    RGB(230, 130, 35),
-    RGB(225, 210, 60),
-    RGB(120, 220, 70),
-    RGB(60, 245, 140),
+---------------------------------------------------------------------------------------------------
+---- ESCALA DIVERGENTE
+----
+---- O sinal e a cor (vermelho = negativo, mint = positivo) e a MAGNITUDE e a saturacao:
+---- perto do zero as duas rampas desbotam para o mesmo cinza, longe do zero saturam.
+---- Assim "quase neutro" le como quase neutro dos dois lados, e o olho encontra os
+---- extremos sem precisar ler numero.
+----
+---- Vermelho e exclusivo do lado negativo -- por isso a rampa positiva nao passa mais
+---- por vermelho/laranja/amarelo. O preco e menos variacao de matiz no positivo; a
+---- compensacao vem da saturacao, que agora carrega a informacao.
+----
+---- Luminancia alta em toda a escala, de proposito: PlaceTextFx pinta o texto com a
+---- MESMA cor do quadrado, entao tom escuro sobre mapa escuro fica ilegivel. Por isso
+---- o extremo negativo e vermelho vivo e nao vermelho-sangue.
+---------------------------------------------------------------------------------------------------
+
+---- zero exato, ou tile sem valor
+local CLR_ZERO = RGB(125, 128, 132)
+
+---- As duas rampas foram espacadas medindo deltaE (CIE76) entre vizinhos, e nao a olho.
+---- A rampa violeta anterior tinha um par com deltaE 9,3 -- indistinguivel na pratica.
+---- Aqui o menor passo e ~22 nas duas, e o L* varia pouco DENTRO de cada rampa, entao a
+---- leitura vem da saturacao/matiz e nao de "uma e mais clara que a outra".
+
+---- positivo: indice 1 = quase zero (cinza esverdeado), 5 = melhor (mint saturado),
+---- com AMARELO no meio -- so saturacao nao dava passos grandes o bastante entre as
+---- bandas do meio. passos deltaE: 48.2, 34.7, 50.6, 33.1
+---- O amarelo nao conflita com o vermelho do lado negativo: o par mais proximo entre as
+---- duas rampas continua sendo o das pontas desbotadas (deltaE 19.7), e nao o amarelo.
+local POS_RAMP = {
+    RGB(152, 170, 160),
+    RGB(200, 215, 115),
+    RGB(232, 240, 55),
+    RGB(120, 240, 130),
+    RGB(0, 250, 200),
 }
+
+---- negativo: indice 1 = quase zero (cinza avermelhado), 5 = pior (vermelho saturado)
+---- passos deltaE: 31.3, 31.3, 22.4, 24.5
+---- O extremo puxa para carmim (255,0,72) em vez de vermelho puro: entre (250,40,26) e
+---- (255,22,22) o olho nao separava nada -- era o mesmo defeito da rampa violeta.
+local NEG_RAMP = {
+    RGB(180, 150, 150),
+    RGB(214, 118, 108),
+    RGB(236, 80, 62),
+    RGB(250, 40, 26),
+    RGB(255, 0, 72),
+}
+
 ---- cortes do gradiente, em % da faixa [min, max]
 local RAMP_STOPS = {20, 40, 60, 80}
 
----- finalista = passou o corte de AIDecisionThreshold. Branco de proposito: a rampa
----- de gradiente nunca produz branco, entao nao ha como confundir com "score alto".
+---- largura maxima do painel, na mesma unidade do `MinWidth 300` do XTemplate do jogo.
+---- Aumente se preferir o painel mais largo; o conteudo quebra linha sozinho.
+local PANEL_MAX_WIDTH = 700
+
+---- finalista = passou o corte de AIDecisionThreshold. Branco de proposito: nenhuma das
+---- duas rampas produz branco, entao nao ha como confundir com "score alto".
 local CLR_FINALIST = RGB(255, 255, 255)
 local RING_SCALE = 165 ---- % do tamanho do quadrado normal
-local CLR_NEG = RGB(180, 60, 200) ---- score negativo
+
+---- policies somadas na camada "soma". Sao os GetEditorView() delas -- os mesmos
+---- rotulos que aparecem no score_details. Mudou o GetEditorView, muda aqui.
+local SUM_LABELS = {"Custom Seek Cover", "Threat Exposure"}
 
 ---- uma cor por alvo, estavel dentro do turno (indice em context.enemies)
 local TARGET_COLORS = {
@@ -99,30 +147,46 @@ end
 ---------------------------------------------------------------------------------------------------
 
 ---- cor de `value` dentro da faixa [vmin, vmax]
-local function ScoreColor(value, vmin, vmax)
-    if not value then
-        return RAMP[1]
-    end
-    if value < 0 then
-        return CLR_NEG
-    end
-    if value == 0 then
-        return RAMP[1]
-    end
-    local span = (vmax or 0) - (vmin or 0)
-    if span <= 0 then
-        return RAMP[#RAMP]
-    end
-    local t = Clamp(MulDivRound(value - vmin, 100, span), 0, 100)
-    ---- bandas explicitas: divisao em Lua devolve float e RAMP[4.5] seria nil
-    local idx = #RAMP
+----
+---- Positivos e negativos sao escalados SEPARADAMENTE, cada um contra o proprio extremo:
+---- o positivo contra vmax, o negativo contra vmin. Escalar os dois juntos sobre o span
+---- inteiro faria o zero cair no meio de uma rampa continua, e um -1 num mapa que vai de
+---- -200 a +100 apareceria com cor de "bem ruim" em vez de "quase neutro".
+---- t (0..100) -> indice de banda numa rampa de 5. Bandas explicitas porque divisao em
+---- Lua devolve float e ramp[4.5] seria nil.
+local function RampBand(t, ramp)
+    local idx = #ramp
     for i, stop in ipairs(RAMP_STOPS) do
         if t < stop then
-            idx = i + 1
+            idx = i
             break
         end
     end
-    return RAMP[idx]
+    return ramp[Clamp(idx, 1, #ramp)]
+end
+
+local function ScoreColor(value, vmin, vmax)
+    if not value or value == 0 then
+        return CLR_ZERO
+    end
+
+    if value < 0 then
+        ---- vmin e o mais negativo; t vai de 0 (quase zero) a 100 (o pior do mapa)
+        local worst = Min(0, vmin or 0)
+        if worst >= 0 then
+            return NEG_RAMP[1]
+        end
+        return RampBand(Clamp(MulDivRound(-value, 100, -worst), 0, 100), NEG_RAMP)
+    end
+
+    ---- A escala positiva sempre parte do ZERO, nunca de vmin. Esticar entre vmin e vmax
+    ---- (como antes) fazia o menor positivo do mapa aparecer sempre desbotado mesmo
+    ---- sendo alto -- e agora que a saturacao significa magnitude, isso mentiria.
+    local top = Max(0, vmax or 0)
+    if top <= 0 then
+        return POS_RAMP[#POS_RAMP]
+    end
+    return RampBand(Clamp(MulDivRound(value, 100, top), 0, 100), POS_RAMP)
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -154,6 +218,36 @@ local function PolicyValue(scores, label)
         end
     end
     return found and total or nil
+end
+
+---------------------------------------------------------------------------------------------------
+-- Selecao multipla de policies (estado)
+--
+-- Guardada por LABEL, nao por indice: `dbg_labels_*` e reconstruido a cada Update e a
+-- ordem muda quando uma policy some da lista (uma Required que falhou, por exemplo).
+-- Indice sobreviveria ao redesenho apontando para outra policy.
+--
+-- Separada por escopo, porque a mesma policy pode ter pesos diferentes em OptLoc e End
+-- Turn -- somar as duas seria somar coisas de escalas diferentes.
+---------------------------------------------------------------------------------------------------
+
+local function SumSelection(self, scope)
+    self.dbg_sum_sel = self.dbg_sum_sel or {}
+    self.dbg_sum_sel[scope] = self.dbg_sum_sel[scope] or {}
+    return self.dbg_sum_sel[scope]
+end
+
+local function SumSelectedLabels(self, scope, labels)
+    local sel = SumSelection(self, scope)
+    local out = {}
+    ---- percorre `labels` e nao `sel`: sai na ordem da lista na tela, e descarta sozinho
+    ---- o que foi marcado num think anterior e nao existe mais
+    for _, label in ipairs(labels or empty_table) do
+        if sel[label] then
+            out[#out + 1] = label
+        end
+    end
+    return out
 end
 
 ---- descobre todos os labels presentes numa tabela de score_details
@@ -322,6 +416,72 @@ function IModeAIDebug:ShowAIVoxels(group)
         end
 
         ------------------------------------------------------------------------------
+        ---- soma de policies -- o balanco cobertura vs exposicao num numero so
+        ------------------------------------------------------------------------------
+    elseif group == "sumsel_end" or group == "sumsel_opt" then
+        local scope = (group == "sumsel_end") and "end" or "opt"
+        local is_end = scope == "end"
+        local score_tbl = (is_end and self.think_data.reachable_scores or
+                              self.think_data.optimal_scores) or empty_table
+        local dests = is_end and (ctx.destinations or empty_table) or
+                          (ctx.all_destinations or ctx.destinations or empty_table)
+
+        local labels = SumSelectedLabels(self, scope,
+                                         is_end and self.dbg_labels_end or self.dbg_labels_opt)
+        if #labels == 0 then
+            self.dbg_layer_label = "nenhuma policy marcada"
+            self:Update()
+            return
+        end
+
+        self.dbg_layer_label = table.concat(labels, " + ") ..
+                                   (is_end and "  <EndTurn>" or "  <OptLoc>")
+
+        NumericLayer(self, fx, dests, function(dest)
+            local scores = score_tbl[dest]
+            if not scores then
+                return nil
+            end
+            local total, found = 0, false
+            for _, label in ipairs(labels) do
+                local v = PolicyValue(scores, label)
+                if v then
+                    total = total + v
+                    found = true
+                end
+            end
+            return found and total or nil
+        end)
+
+    elseif group == "sum_cover_threat_end" or group == "sum_cover_threat_opt" then
+        local is_end = group == "sum_cover_threat_end"
+        local score_tbl = (is_end and self.think_data.reachable_scores or
+                              self.think_data.optimal_scores) or empty_table
+        local dests = is_end and (ctx.destinations or empty_table) or
+                          (ctx.all_destinations or ctx.destinations or empty_table)
+
+        self.dbg_layer_label = table.concat(SUM_LABELS, " + ") ..
+                                   (is_end and " <EndTurn>" or " <OptLoc>")
+
+        NumericLayer(self, fx, dests, function(dest)
+            local scores = score_tbl[dest]
+            if not scores then
+                return nil
+            end
+            ---- nil quando NENHUMA das duas rodou neste tile: pintar 0 ali diria
+            ---- "equilibrado" quando o certo e "sem dado"
+            local total, found = 0, false
+            for _, label in ipairs(SUM_LABELS) do
+                local v = PolicyValue(scores, label)
+                if v then
+                    total = total + v
+                    found = true
+                end
+            end
+            return found and total or nil
+        end)
+
+        ------------------------------------------------------------------------------
         ---- camadas de ALVO -- de cada tile alcancavel, em quem a IA atiraria e quao bem
         ------------------------------------------------------------------------------
     elseif group == "target_recalc" then
@@ -347,8 +507,8 @@ function IModeAIDebug:ShowAIVoxels(group)
                 fx[#fx + 1] = PlaceSquareFX(5 * guic, pt, color)
                 fx[#fx + 1] = PlaceTextFx("#" .. tostring(idx or "?"), pt, color)
             else
-                fx[#fx + 1] = PlaceSquareFX(5 * guic, pt, RAMP[1])
-                fx[#fx + 1] = PlaceTextFx("-", pt, RAMP[1])
+                fx[#fx + 1] = PlaceSquareFX(5 * guic, pt, CLR_ZERO)
+                fx[#fx + 1] = PlaceTextFx("-", pt, CLR_ZERO)
             end
         end
 
@@ -419,6 +579,53 @@ function IModeAIDebug:ShowAIVoxels(group)
     end
 
     self:Update()
+end
+
+---------------------------------------------------------------------------------------------------
+-- Selecao multipla de policies
+--
+-- A selecao e guardada por LABEL, nao por indice: `dbg_labels_*` e reconstruido a cada
+-- Update e a ordem muda quando uma policy some da lista (Required que falhou, por
+-- exemplo). Indice sobreviveria ao redesenho apontando para outra policy.
+--
+-- Por escopo, porque a mesma policy pode ter pesos diferentes em OptLoc e End Turn e nao
+-- faz sentido somar as duas coisas.
+---------------------------------------------------------------------------------------------------
+
+---- arg vem como "end_3" / "opt_12": escopo + indice na lista daquele escopo
+function IModeAIDebug:ToggleSumPolicy(arg)
+    local scope, idx = string.match(tostring(arg or ""), "^(%a+)_(%d+)$")
+    if not scope then
+        return
+    end
+    local labels = (scope == "end" and self.dbg_labels_end or self.dbg_labels_opt) or empty_table
+    local label = labels[tonumber(idx)]
+    if not label then
+        return
+    end
+    local sel = SumSelection(self, scope)
+    sel[label] = (not sel[label]) or nil
+
+    ---- se a camada de soma esta no ar, repinta com a selecao nova
+    if self.dbg_layer == "sumsel_" .. scope then
+        self:ShowAIVoxels(self.dbg_layer)
+    else
+        self:Update()
+    end
+end
+
+function IModeAIDebug:ClearSumPolicies(scope)
+    if scope then
+        self.dbg_sum_sel = self.dbg_sum_sel or {}
+        self.dbg_sum_sel[scope] = {}
+    else
+        self.dbg_sum_sel = {}
+    end
+    if self.dbg_layer and string.match(self.dbg_layer, "^sumsel_") then
+        self:ClearAILayer()
+    else
+        self:Update()
+    end
 end
 
 function IModeAIDebug:ClearAILayer()
@@ -672,6 +879,13 @@ local function PageCamadas(self, text)
     text = text .. "\n" .. link("ShowAIVoxels", "pathtotarget", "Path to Target")
     text = text .. "   " .. link("ClearAILayer", nil, "Limpar", 255, 120, 120)
 
+    ---- balanco cobertura vs exposicao: as duas policies medem lados opostos da mesma
+    ---- pergunta, entao a soma delas e mais legivel que as duas camadas separadas
+    text = text .. "\n\n<color 160 105 245>Soma</color> " ..
+               table.concat(SUM_LABELS, " + ") .. ":"
+    text = text .. "\n" .. link("ShowAIVoxels", "sum_cover_threat_opt", "OptLoc")
+    text = text .. "   " .. link("ShowAIVoxels", "sum_cover_threat_end", "End Turn")
+
     text = text .. "\n\n<color 255 160 60>Alvo</color> (por tile alcancavel):"
     text = text .. "\n" .. link("ShowAIVoxels", "target_who", "Quem seria o alvo")
     text = text .. "   " .. link("ShowAIVoxels", "target_cth", "CTH 1o disparo")
@@ -683,41 +897,45 @@ local function PageCamadas(self, text)
         text = text .. " <color 255 160 60>(hipotetico)</color>"
     end
 
+    ---- lista de policies com caixa de selecao: [ ] marca/desmarca para a soma,
+    ---- o nome continua abrindo a camada individual como sempre
+    local function PolicyList(scope, labels, title, r, g, b)
+        if #labels == 0 then
+            return
+        end
+        local selected = SumSelectedLabels(self, scope, labels)
+
+        text = text .. string.format("\n\n<color %d %d %d>%s</color> (por slab):", r, g, b, title)
+        if #selected > 0 then
+            text = text .. "   " ..
+                       link("ShowAIVoxels", "sumsel_" .. scope,
+                            string.format("somar %d", #selected), 150, 210, 255)
+            text = text .. "  " .. link("ClearSumPolicies", scope, "desmarcar", 255, 120, 120)
+        end
+
+        local sel = SumSelection(self, scope)
+        for i, label in ipairs(labels) do
+            local on = sel[label]
+            local box = link("ToggleSumPolicy", scope .. "_" .. i, on and "[x]" or "[ ]",
+                             on and 150 or 130, on and 210 or 130, on and 255 or 130)
+            local mark = (self.dbg_layer == "policy_" .. scope .. "_" .. i) and
+                             " <color 0 255 0>&lt;&lt;</color>" or ""
+            text = text .. "\n  " .. box .. " " ..
+                       link("ShowAIVoxels", "policy_" .. scope .. "_" .. i, label) .. mark
+        end
+    end
+
     self.dbg_labels_end = CollectPolicyLabels(td.reachable_scores)
-    if #self.dbg_labels_end > 0 then
-        text = text .. "\n\n<color 0 255 255>End-Turn policies</color> (por slab):"
-        for i, label in ipairs(self.dbg_labels_end) do
-            local mark = (self.dbg_layer == "policy_end_" .. i) and
-                             " <color 0 255 0>&lt;&lt;</color>" or ""
-            text = text .. "\n  " .. link("ShowAIVoxels", "policy_end_" .. i, label) .. mark
-        end
-    end
-
     self.dbg_labels_opt = CollectPolicyLabels(td.optimal_scores)
-    if #self.dbg_labels_opt > 0 then
-        text = text .. "\n\n<color 0 255 0>Optimal-Location policies</color> (por slab):"
-        for i, label in ipairs(self.dbg_labels_opt) do
-            local mark = (self.dbg_layer == "policy_opt_" .. i) and
-                             " <color 0 255 0>&lt;&lt;</color>" or ""
-            text = text .. "\n  " .. link("ShowAIVoxels", "policy_opt_" .. i, label) .. mark
-        end
-    end
+    PolicyList("end", self.dbg_labels_end, "End-Turn policies", 0, 255, 255)
+    PolicyList("opt", self.dbg_labels_opt, "Optimal-Location policies", 0, 255, 0)
 
-    if self.dbg_layer and self.dbg_layer_range then
-        local vmin, vmax, threshold = self.dbg_layer_range[1], self.dbg_layer_range[2],
-                                      self.dbg_layer_range[3]
-        text = text .. "\n\n<color 255 200 0>Camada ativa:</color> " ..
-                   (self.dbg_layer_label or self.dbg_layer)
-        text = text .. string.format("\n  faixa: %d .. %d", vmin or 0, vmax or 0)
-        if threshold then
-            text = text .. string.format("\n  corte (%d%% do melhor): %d",
-                                         const.AIDecisionThreshold, threshold)
-            text = text .. "\n  <color 255 255 255>anel branco maior + *</color> = finalista (entra no sorteio)"
-        end
-        text = text ..
-                   "\n  <color 210 55 45>pior</color> <color 230 130 35>-</color> <color 225 210 60>-</color> <color 120 220 70>-</color> <color 60 245 140>melhor</color>"
-        text = text .. "   <color 180 60 200>roxo</color> = negativo"
-    end
+    ---- O bloco "Camada ativa" foi removido: o painel e um XText de largura automatica,
+    ---- e as linhas dele eram as mais compridas da pagina -- o nome da camada de soma
+    ---- cresce com cada policy marcada ("A + B + C  <OptLoc>"), esticando a janela na
+    ---- horizontal. As mesmas informacoes continuam disponiveis: o que esta marcado
+    ---- aparece nas caixas [x] da lista, e a camada ativa no marcador << .
+    ---- `dbg_layer_range` continua sendo preenchido pelas camadas, so nao e mais exibido.
 
     return text
 end
@@ -823,6 +1041,19 @@ function IModeAIDebug:Update()
     local ctrl = self:ResolveId("idText")
     if not ctrl then
         return
+    end
+
+    ---- Teto de largura. O XTemplate do jogo da ao idText `MinWidth 300` e nenhum
+    ---- MaxWidth, entao o painel acompanha a linha mais comprida do conteudo e a janela
+    ---- cresce sem limite na horizontal. Mesma unidade do MinWidth do template.
+    ---- Com WordWrap ligado a linha quebra; sem ele, MaxWidth cortaria o texto.
+    ---- HasMember antes de chamar: se o setter nao existir nesta versao da engine, a
+    ---- UI segue como estava em vez de estourar erro a cada Update.
+    if ctrl.MaxWidth ~= PANEL_MAX_WIDTH and ctrl:HasMember("SetMaxWidth") then
+        ctrl:SetMaxWidth(PANEL_MAX_WIDTH)
+    end
+    if not ctrl.WordWrap and ctrl:HasMember("SetWordWrap") then
+        ctrl:SetWordWrap(true)
     end
 
     local text = ""

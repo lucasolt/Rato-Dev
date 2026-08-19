@@ -17,6 +17,12 @@ end
 function OnMsg.OnAttack(unit, action, target, results, attack_args)
     last_results = results
 
+    local weapon = attack_args and attack_args.weapon
+    if weapon then
+        if not IsKindOf(weapon, "Firearm") and not IsKindOf(weapon, "MeleeWeapon") then
+            return
+        end
+    end
     local insert_results = table.copy(results)
     local target_pos = target and target:GetPos()
     if target then
@@ -25,6 +31,9 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
 
     local att_pos = results.attack_pos
     local dist = target_pos and att_pos:Dist(target_pos)
+    if not dist then
+        return
+    end
     dist = dist / const.SlabSizeX
     insert_results.distance = dist
     insert_results.target_id = target.sesion_id
