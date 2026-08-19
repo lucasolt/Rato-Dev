@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 553,
+	'version', 554,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -31,7 +31,7 @@ return PlaceObj('ModDef', {
 	},
 	'default_options', {},
 	'has_data', true,
-	'saved', 1787087354,
+	'saved', 1787174897,
 	'code_hash', -7221069026057771930,
 	'affected_resources', {
 		PlaceObj('ModResourcePreset', {
