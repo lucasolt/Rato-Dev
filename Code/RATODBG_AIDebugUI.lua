@@ -867,6 +867,325 @@ local function PageAcoes(self, text)
     return text
 end
 
+---------------------------------------------------------------------------------------------------
+-- LINHAS DE INFLUENCIA POR INIMIGO  (rollover)
+--
+-- Passe o mouse num tile e cada inimigo puxa uma linha ate ele, com o NUMERO da
+-- contribuicao daquele inimigo para o score do tile e a cor da mesma escala divergente
+-- das camadas (ScoreColor): vermelho = tira score, mint/amarelo = poe score, saturacao
+-- = magnitude.
+--
+-- Tres modos:
+--   threat -- so a AIPolicyThreatExposure   (sempre <= 0)
+--   cover  -- so a AIPolicyCustomSeekCover  (>= 0, salvo ExposedAtCloseRange)
+--   sum    -- os dois somados por inimigo. Este e o que responde "contra QUEM este tile
+--             me protege e contra quem nao", que a camada `sum_cover_threat_*` so
+--             responde no agregado.
+--
+-- COMO O NUMERO E OBTIDO -- e a parte que importa para ele nao mentir:
+--
+--   1. peso bruto por inimigo, chamando as MESMAS funcoes que as policies chamam
+--      (RATOAI_ThreatRamp + GetEnemyRange; GetCoverScore), nunca uma copia da formula;
+--   2. o EvalDest REAL da policy e entao RATEADO sobre esses pesos.
+--
+-- O passo 2 e o que faz o painel acompanhar sozinho qualquer mudanca de normalizacao
+-- (presence, ThreatRelative, clamp de saturacao, Weight): daqui sai so a PROPORCAO
+-- entre inimigos; o total vem da policy. Reimplementar a formula aqui era o caminho
+-- curto e seria o primeiro lugar a divergir em silencio.
+--
+-- O valor mostrado ja inclui o `Weight` da policy -- e a mesma quantidade que o
+-- score_details guarda e que as camadas pintam, entao a soma das linhas bate com o
+-- numero que a camada escreve no tile.
+---------------------------------------------------------------------------------------------------
+
+local INFL_MODES = {
+    {id = "threat", name = "Ameaca"},
+    {id = "cover", name = "Cobertura"},
+    {id = "sum", name = "Ameaca + Cobertura"},
+}
+
+---- alturas das duas pontas da linha. A do inimigo na altura do peito (o spheroid de
+---- pathfind tem 165cm) para a linha nao afundar no terreno; a do tile rente ao chao,
+---- logo acima do quadrado da camada (que fica em 5*guic).
+local INFL_Z_ENEMY = 110 * guic
+local INFL_Z_TILE = 25 * guic
+
+---- fracao do caminho, do tile para o inimigo, onde o numero e escrito. Perto do tile
+---- as linhas convergem e os rotulos se empilham; a 65% elas ja se abriram.
+local INFL_LABEL_AT = 65
+
+local function InflValidZ(pt)
+    return pt:IsValidZ() and pt or pt:SetTerrainZ()
+end
+
+local function PlaceLineFX(p1, p2, color)
+    local path = pstr("")
+    path:AppendVertex(p1, color)
+    path:AppendVertex(p2)
+    local line = PlaceObject("Polyline")
+    line:SetPos(p1)
+    line:SetMesh(path)
+    return line
+end
+
+local function FindPolicy(list, class)
+    for _, pol in ipairs(list or empty_table) do
+        if IsKindOf(pol, class) then
+            return pol
+        end
+    end
+end
+
+---- As duas policies usam exatamente este gate. Replicado porque nao da para perguntar
+---- a elas "voce contaria este inimigo?" sem rodar o EvalDest inteiro -- e o EvalDest
+---- devolve o agregado, que e justamente o que estamos abrindo.
+local function PolicySeesEnemy(pol, context, enemy)
+    if pol.visibility_mode == "self" then
+        return context.enemy_visible[enemy]
+    elseif pol.visibility_mode == "team" then
+        return context.enemy_visible_by_team[enemy]
+    end
+    return true
+end
+
+---- peso bruto de cada inimigo na AIPolicyThreatExposure
+local function ThreatRaw(pol, context, dest, target_pos)
+    local raw = {}
+    for _, enemy in ipairs(context.enemies or empty_table) do
+        local alive = IsValid(enemy) and not (enemy:IsDead() or enemy:IsDowned())
+        if alive and PolicySeesEnemy(pol, context, enemy) then
+            local att_pos = InflValidZ(enemy:GetPos())
+            if IsValidPos(att_pos) then
+                raw[enemy] = RATOAI_ThreatRamp(att_pos:Dist(target_pos), pol:GetEnemyRange(enemy))
+            end
+        end
+    end
+    return raw
+end
+
+---- peso bruto de cada inimigo na AIPolicyCustomSeekCover: c_i * w_i, o proprio termo
+---- que a policy acumula no numerador
+local function CoverRaw(pol, context, dest, grid_voxel)
+    local raw = {}
+    local _, _, _, stance_idx = stance_pos_unpack(dest)
+    local ustance = StancesList[stance_idx]
+    for _, enemy in ipairs(context.enemies or empty_table) do
+        if IsValid(enemy) and PolicySeesEnemy(pol, context, enemy) then
+            local cover, weight = pol:GetCoverScore(context, enemy, context.unit, dest, nil,
+                                                    grid_voxel, ustance)
+            raw[enemy] = (cover or 0) * (weight or 0)
+        end
+    end
+    return raw
+end
+
+---- rateia o EvalDest real (ja com Weight) sobre os pesos brutos
+local function InfluenceShares(pol, context, dest, grid_voxel, raw)
+    local total_raw = 0
+    for _, v in pairs(raw) do
+        total_raw = total_raw + v
+    end
+    local eval = pol:EvalDest(context, dest, grid_voxel) or 0
+    local total = MulDivRound(eval, pol.Weight or 100, 100)
+
+    ---- soma dos brutos em zero: ou ninguem pesa, ou os sinais se cancelaram
+    ---- (ExposedAtCloseRange negativo contra cobertura positiva). Ratear por zero
+    ---- inventaria numero -- melhor devolver nada e dizer que nao ha rateio.
+    if total_raw == 0 then
+        return {}, total, false
+    end
+
+    local out, assigned, biggest, biggest_v = {}, 0, nil, 0
+    for enemy, v in pairs(raw) do
+        if v ~= 0 then
+            local share = MulDivRound(total, v, total_raw)
+            out[enemy] = share
+            assigned = assigned + share
+            if not biggest or abs(v) > abs(biggest_v) then
+                biggest, biggest_v = enemy, v
+            end
+        end
+    end
+
+    ---- sobra de arredondamento no maior termo. Sem isto a soma das linhas erra o total
+    ---- do tile por alguns pontos -- e um painel de conferencia que nao fecha a conta e
+    ---- pior do que painel nenhum: vira mais uma coisa para desconfiar.
+    if biggest and assigned ~= total then
+        out[biggest] = out[biggest] + (total - assigned)
+    end
+
+    return out, total, true
+end
+
+function IModeAIDebug:ClearInfluenceFx()
+    for _, fx in ipairs(self.dbg_infl_fx or empty_table) do
+        DoneObject(fx)
+    end
+    self.dbg_infl_fx = nil
+end
+
+---- arg: "threat" | "cover" | "sum" -- clicar no modo ativo desliga
+function IModeAIDebug:SetInfluenceMode(arg)
+    self.dbg_influence = (self.dbg_influence ~= arg) and arg or nil
+    self:DrawInfluenceLines()
+    self:Update()
+end
+
+function IModeAIDebug:SetInfluenceScope(arg)
+    self.dbg_influence_scope = arg
+    self:DrawInfluenceLines()
+    self:Update()
+end
+
+function IModeAIDebug:DrawInfluenceLines()
+    self:ClearInfluenceFx()
+
+    local mode = self.dbg_influence
+    local ctx = self.ai_context
+    if not mode or not ctx or not self.selected_unit or not self.selected_voxel then
+        return
+    end
+
+    ---- mesmo destino que o rollover de texto usa: o alcancavel quando existe, senao um
+    ---- empacotado com a PrefStance. A postura importa -- cobertura baixa nao conta em pe.
+    local x, y, z = point_unpack(self.selected_voxel)
+    local dest = (ctx.voxel_to_dest or empty_table)[self.selected_voxel] or
+                     stance_pos_pack(x, y, z, StancesList[ctx.archetype.PrefStance])
+    local gx, gy, gz = WorldToVoxel(x, y, z)
+    local grid_voxel = point_pack(gx, gy, gz)
+
+    local tile_pos = InflValidZ(DestToPoint(dest))
+    local target_pos = tile_pos
+
+    ---- `and/or` nao serve aqui: com o escopo em End Turn e um behavior sem
+    ---- EndTurnPolicies, o `or` cairia no OptLoc e mostraria numero da OUTRA lista de
+    ---- policies sem nada indicando a troca. Lista vazia e a resposta honesta -- as
+    ---- policies aparecem como ausentes no rotulo.
+    local scope = self.dbg_influence_scope or "opt"
+    local list
+    if scope == "end" then
+        list = ctx.behavior and ctx.behavior.EndTurnPolicies or empty_table
+    else
+        list = self.selected_unit:GetArchetype().OptLocPolicies
+    end
+
+    local threat_pol = FindPolicy(list, "AIPolicyThreatExposure")
+    local cover_pol = FindPolicy(list, "AIPolicyCustomSeekCover")
+
+    ---- soma por inimigo dos modos pedidos
+    local shares, total, missing = {}, 0, {}
+    local unsplit = false
+
+    local function add(pol, raw_fn, label)
+        if not pol then
+            missing[#missing + 1] = label
+            return
+        end
+        local part, part_total, split = InfluenceShares(pol, ctx, dest, grid_voxel, raw_fn(pol))
+        for enemy, v in pairs(part) do
+            shares[enemy] = (shares[enemy] or 0) + v
+        end
+        total = total + part_total
+        ---- a policy pontuou mas nenhum inimigo carregou peso (last_known_enemy_pos, ou
+        ---- sinais que se cancelaram): ha total sem linha nenhuma que o explique
+        if not split and part_total ~= 0 then
+            unsplit = true
+        end
+    end
+
+    if mode == "threat" or mode == "sum" then
+        add(threat_pol, function(pol)
+            return ThreatRaw(pol, ctx, dest, target_pos)
+        end, "Threat Exposure")
+    end
+    if mode == "cover" or mode == "sum" then
+        add(cover_pol, function(pol)
+            return CoverRaw(pol, ctx, dest, grid_voxel)
+        end, "Custom Seek Cover")
+    end
+
+    local vmin, vmax
+    for _, v in pairs(shares) do
+        vmin = vmin and Min(vmin, v) or v
+        vmax = vmax and Max(vmax, v) or v
+    end
+
+    local fx = {}
+    for _, enemy in ipairs(ctx.enemies or empty_table) do
+        local v = shares[enemy]
+        if v and IsValid(enemy) then
+            local from = InflValidZ(enemy:GetPos()):AddZ(INFL_Z_ENEMY)
+            local to = tile_pos:AddZ(INFL_Z_TILE)
+            ---- escala por TILE e nao pelo mapa: a pergunta aqui e quem domina ESTE
+            ---- tile. Normalizar pelo mapa deixaria todas as linhas desbotadas nos
+            ---- tiles tranquilos, que sao justamente os que interessa comparar.
+            local color = ScoreColor(v, vmin, vmax)
+            fx[#fx + 1] = PlaceLineFX(from, to, color)
+            fx[#fx + 1] = PlaceTextFx(string.format("#%d %+d", TargetIndex(ctx, enemy) or 0, v),
+                                      to + (from - to) * INFL_LABEL_AT / 100, color)
+        end
+    end
+
+    ---- total no proprio tile: e o numero que a camada da policy (ou a de soma) escreve
+    ---- neste slab, entao os dois tem que bater. As ressalvas vao juntas em vez de
+    ---- substituir o total -- em modo `sum` com uma das policies ausente o total ainda
+    ---- vale, e so nao vale pelo que o nome do modo promete.
+    if next(shares) or #missing > 0 or unsplit then
+        local head = string.format("%+d", total)
+        if #missing > 0 then
+            head = head .. "  (sem " .. table.concat(missing, " / ") .. ")"
+        end
+        if unsplit then
+            head = head .. "  (sem rateio por inimigo)"
+        end
+        ---- o total entra na propria faixa: sendo a soma, quase sempre e o extremo, e
+        ---- ficaria saturado no maximo escalado so contra as parcelas
+        local color = ScoreColor(total, Min(vmin or 0, total), Max(vmax or 0, total))
+        fx[#fx + 1] = PlaceTextFx(head, tile_pos:AddZ(INFL_Z_ENEMY + 40 * guic), color)
+    end
+
+    self.dbg_infl_fx = fx
+end
+
+---------------------------------------------------------------------------------------------------
+-- Ganchos
+--
+-- OnMousePos so redesenha quando o voxel MUDA. O original retorna cedo quando e o mesmo
+-- voxel e nao diz se mudou, entao comparamos com o ultimo voxel desenhado.
+--
+-- Os originais sao guardados em GLOBAIS com o idioma `rawget(_G, x) or ...`: este e o
+-- mod de desenvolvimento, recarregado o tempo todo, e capturar `IModeAIDebug.OnMousePos`
+-- direto numa local pegaria o WRAPPER da carga anterior na segunda recarga -- recursao
+-- infinita no primeiro movimento do mouse. Com a global, a captura acontece uma vez so.
+---------------------------------------------------------------------------------------------------
+
+RATODBG_Orig_OnMousePos = rawget(_G, "RATODBG_Orig_OnMousePos") or IModeAIDebug.OnMousePos
+function IModeAIDebug:OnMousePos(pt)
+    RATODBG_Orig_OnMousePos(self, pt)
+    if self.dbg_influence and self.dbg_infl_voxel ~= self.selected_voxel then
+        self.dbg_infl_voxel = self.selected_voxel
+        self:DrawInfluenceLines()
+    end
+end
+
+RATODBG_Orig_Done = rawget(_G, "RATODBG_Orig_Done") or IModeAIDebug.Done
+function IModeAIDebug:Done(...)
+    self:ClearInfluenceFx()
+    return RATODBG_Orig_Done(self, ...)
+end
+
+---- Process refaz o think e troca o ai_context. As linhas no ar apontam para numeros do
+---- context antigo, e so seriam redesenhadas quando o mouse trocasse de tile -- ate la,
+---- dado velho na tela sem nada indicando isso. Redesenha na hora, com o mouse parado.
+RATODBG_Orig_Process = rawget(_G, "RATODBG_Orig_Process") or IModeAIDebug.Process
+function IModeAIDebug:Process(...)
+    local res = RATODBG_Orig_Process(self, ...)
+    if self.dbg_influence then
+        self:DrawInfluenceLines()
+    end
+    return res
+end
+
 local function PageCamadas(self, text)
     local td = self.think_data or empty_table
 
@@ -885,6 +1204,27 @@ local function PageCamadas(self, text)
                table.concat(SUM_LABELS, " + ") .. ":"
     text = text .. "\n" .. link("ShowAIVoxels", "sum_cover_threat_opt", "OptLoc")
     text = text .. "   " .. link("ShowAIVoxels", "sum_cover_threat_end", "End Turn")
+
+    ---- por inimigo, no tile sob o mouse
+    text = text .. "\n\n<color 120 245 255>Linhas de influencia</color> (rollover):"
+    text = text .. "\n "
+    for _, m in ipairs(INFL_MODES) do
+        local on = self.dbg_influence == m.id
+        text = text .. "  " ..
+                   link("SetInfluenceMode", m.id, on and ("[" .. m.name .. "]") or m.name,
+                        on and 120 or 0, on and 245 or 255, on and 255 or 255)
+    end
+    if self.dbg_influence then
+        local scope = self.dbg_influence_scope or "opt"
+        text = text .. "\n   escopo: " ..
+                   link("SetInfluenceScope", "opt",
+                        (scope == "opt") and "[OptLoc]" or "OptLoc", 0, 255, 0)
+        text = text .. "  " ..
+                   link("SetInfluenceScope", "end",
+                        (scope == "end") and "[End Turn]" or "End Turn", 0, 255, 255)
+        text = text .. "\n   <color 120 120 120>valores ja com o Weight da policy;" ..
+                   " cor normalizada dentro do tile</color>"
+    end
 
     text = text .. "\n\n<color 255 160 60>Alvo</color> (por tile alcancavel):"
     text = text .. "\n" .. link("ShowAIVoxels", "target_who", "Quem seria o alvo")

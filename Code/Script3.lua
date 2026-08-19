@@ -3,11 +3,11 @@
 --        unit:ChangeStance("", 0, "Standing")
 --    end
 -- end
-function OnMsg.CombatActionEnd(unit)
-   if unit.action_command == "Bandage" and (unit.stance == "Crouch" or unit.stance == "Prone") then
-       CreateGameTimeThread(function()
-           Sleep(0)
-           unit:SetCommandIfNotDead("ChangeStance", "", 0, "Standing")
-       end)
-   end
-end
+-- function OnMsg.CombatActionEnd(unit)
+--   if unit.action_command == "Bandage" and (unit.stance == "Crouch" or unit.stance == "Prone") then
+--       CreateGameTimeThread(function()
+--           Sleep(0)
+--           unit:SetCommandIfNotDead("ChangeStance", "", 0, "Standing")
+--       end)
+--   end
+-- end
