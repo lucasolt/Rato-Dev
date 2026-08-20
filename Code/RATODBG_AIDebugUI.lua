@@ -501,7 +501,10 @@ function IModeAIDebug:ShowAIVoxels(group)
         ---- ficam com um tile so. Isto recalcula em TODOS os destinos alcancaveis --
         ---- resposta hipotetica ("se ela se movesse, atiraria em quem"), nao o que a
         ---- IA de fato avaliou. So no modo de debug, a unidade nao esta agindo.
-        pcall(AIPrecalcDamageScore, ctx, ctx.destinations)
+        ---- via PrecalcForDebug para congelar a randomizacao por alvo: sem isso o
+        ---- recalculo re-sorteia `target_score_mod` e os scores da pagina Alvo mudam
+        ---- so por ter-se aberto esta camada.
+        self:PrecalcForDebug(ctx.destinations)
         self.dbg_targets_recalced = true
         self.dbg_layer = nil
         self:Update()
@@ -983,14 +986,24 @@ local function PolicySeesEnemy(pol, context, enemy)
 end
 
 ---- peso bruto de cada inimigo na AIPolicyThreatExposure
+---- Dois cuidados na chamada da rampa:
+----   * GetEnemyRange devolve DOIS valores (range, is_firearm), e em Lua o multi-retorno
+----     na ultima posicao de argumento EXPANDE -- sem os parenteses o booleano cai no
+----     parametro `plateau`, e o `dist <= plateau` dentro de RATOAI_ThreatRamp compara
+----     numero com booleano e estoura. So nao aparecia porque ThreatRaw e do ramo de
+----     DUAS policies, e o CoverCancels vem ligado por default.
+----   * o plateau precisa ser passado de verdade: sem ele este "bruto" ignora o
+----     PlateauTiles e diverge da propria policy que ele diz estar decompondo.
 local function ThreatRaw(pol, context, dest, target_pos)
     local raw = {}
+    local plateau = (pol.PlateauTiles or 0) * const.SlabSizeX
     for _, enemy in ipairs(context.enemies or empty_table) do
         local alive = IsValid(enemy) and not (enemy:IsDead() or enemy:IsDowned())
         if alive and PolicySeesEnemy(pol, context, enemy) then
             local att_pos = InflValidZ(enemy:GetPos())
             if IsValidPos(att_pos) then
-                raw[enemy] = RATOAI_ThreatRamp(att_pos:Dist(target_pos), pol:GetEnemyRange(enemy))
+                raw[enemy] = RATOAI_ThreatRamp(att_pos:Dist(target_pos),
+                                               (pol:GetEnemyRange(enemy)), plateau)
             end
         end
     end
@@ -1115,10 +1128,15 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
                 local att_pos = InflValidZ(enemy:GetPos())
                 if IsValidPos(att_pos) then
                     local range, is_firearm = threat_pol:GetEnemyRange(enemy)
-                    local ramp = RATOAI_ThreatRamp(att_pos:Dist(target_pos), range, plateau)
+                    local d = att_pos:Dist(target_pos)
+                    local ramp = RATOAI_ThreatRamp(d, range, plateau)
                     local unc = 100
                     if ramp > 0 then
-                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm)
+                        ---- `d` explicito: o GetUncovered precisa da distancia para a
+                        ---- rampa de CoverNearTiles e, sem receber, recalcula a mesma
+                        ---- Dist() que a linha acima ja pagou
+                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm,
+                                                      d)
                     end
                     local net = MulDivRound(ramp, unc, 100)
                     bruta[enemy], liquida[enemy], cancelada[enemy] = ramp, net, ramp - net
@@ -1451,10 +1469,20 @@ local function PageCamadas(self, text)
         text = text .. "\n   <color 255 120 120>nenhuma policy de ameaca/cobertura neste" ..
                    " escopo</color>"
     elseif cancels then
+        ---- com CoverNearTiles ligado a confianca passa a ser POR INIMIGO, entao um
+        ---- numero fixo aqui anunciaria uma coisa enquanto as linhas usam outra -- a
+        ---- mesma divergencia silenciosa que o Decompose existe para nao permitir
+        local near_t = infl_pol.CoverNearTiles or 0
+        local trust_txt = string.format("trust %d%%", Clamp(infl_pol.CoverTrust or 100, 0, 100))
+        if near_t > 0 then
+            trust_txt = string.format("trust %d%% -> %d%% dentro de %dt",
+                                      Clamp(infl_pol.CoverTrust or 100, 0, 100),
+                                      Clamp(infl_pol.CoverTrustNear or 0, 0, 100), near_t)
+        end
         text = text .. string.format("\n   <color 120 245 255>CoverCancels ON</color>" ..
-                                         "  <color 120 120 120>trust %d%% | plato %dt | saturacao %d</color>",
-                                     Clamp(infl_pol.CoverTrust or 100, 0, 100),
-                                     infl_pol.PlateauTiles or 0, infl_pol:GetSaturation())
+                                         "  <color 120 120 120>%s | plato %dt | saturacao %d</color>",
+                                     trust_txt, infl_pol.PlateauTiles or 0,
+                                     infl_pol:GetSaturation())
         if infl_cover then
             text = text .. "\n   <color 255 120 120>ha uma Seek Cover nesta mesma lista:" ..
                        " contagem DOBRADA</color>"
@@ -1526,6 +1554,173 @@ local function PageCamadas(self, text)
     return text
 end
 
+---------------------------------------------------------------------------------------------------
+-- Pagina ALVO
+--
+-- A versao anterior desta pagina so conseguia mostrar o alvo VENCEDOR: tudo que
+-- AIPrecalcDamageScore expunha era indexado por DESTINO com o eixo de alvo ja colapsado
+-- (dest_cth, dest_hit_score, dest_target_score guardam best_*). Score por candidato so
+-- aparecia para quem tinha passado o corte, via debug_data, e "descartado" era o mesmo
+-- `-` para fora de alcance, sem LOF e CTH zero.
+--
+-- Agora le `context.dbg_targets[dest]`, gravado pelo DEBUG (D1) do Rato AI Overhaul:
+-- uma linha por (destino, alvo) com CTH, disparos, cadeia do score e motivo de descarte,
+-- mais o corte dos 80%, o total e o valor do sorteio.
+---------------------------------------------------------------------------------------------------
+
+local function num(v)
+    return v and tostring(v) or "-"
+end
+
+local function slabs(dist)
+    return dist and tostring(MulDivRound(dist, 1, const.SlabSizeX)) or "-"
+end
+
+local function cover_txt(v)
+    if not v or v == 0 then
+        return "-"
+    end
+    ---- target_covers guarda o valor de CTH da cobertura (max = alta, metade = baixa)
+    local full = RATOAI_GetMaxCoverCTH and RATOAI_GetMaxCoverCTH()
+    if full and v >= full then
+        return "alta"
+    end
+    return "baixa"
+end
+
+---- Lista que o precalc realmente percorreu: `action:GetTargets()` filtrado por lado,
+---- mais alvos injetados por gv_AITargetModifiers. Pode divergir de context.enemies --
+---- iterar so `enemies`, como a versao anterior fazia, escondia alvos que a IA de fato
+---- considerou (e mostrava como candidato quem nunca entrou na lista).
+local function CandidateList(ctx)
+    local list = ctx.dbg_target_list
+    if list and #list > 0 then
+        return list
+    end
+    return ctx.enemies or empty_table
+end
+
+---- Os precalcs disparados pela UI (esta pagina e a camada "target_recalc") re-sorteiam
+---- a randomizacao por alvo. Congelar antes de chamar: senao o numero que se esta
+---- investigando muda so por ter sido observado.
+function IModeAIDebug:PrecalcForDebug(dests)
+    local ctx = self.ai_context
+    if not ctx then
+        return
+    end
+    ctx.dbg_freeze_target_rand = true
+    pcall(AIPrecalcDamageScore, ctx, dests, nil, ctx.dbg_enemy_damage_score)
+end
+
+---- Alvo aberto no cartao de detalhe, identificado pelo HANDLE. Nao por indice na
+---- lista (a ordenacao da tabela muda quando os scores mudam) e nao por session_id: o
+---- hyperlink do painel e `<h Func arg ...>`, com o argumento delimitado por espaco --
+---- um session_id com espaco quebraria o parse. handle e numerico.
+function IModeAIDebug:SetTargetFocus(arg)
+    arg = tostring(arg or "")
+    self.dbg_target_focus = (self.dbg_target_focus ~= arg) and arg or nil
+    self:Update()
+end
+
+---- uma linha da tabela, ja resolvida para exibicao
+local function BuildRows(ctx, dbg_dest, scored)
+    local fin = {}
+    for _, t in ipairs((dbg_dest or empty_table).finalists or empty_table) do
+        fin[t] = true
+    end
+
+    local rows = {}
+    for _, target in ipairs(CandidateList(ctx)) do
+        if IsValid(target) then
+            local r = (dbg_dest and dbg_dest.by_target[target]) or empty_table
+            ---- fallback para o debug_data do jogo quando o precalc rodou sem
+            ---- RATOAI_Debug: ali so ha score, e so para finalistas
+            local score = r.score or (scored and scored[target])
+            rows[#rows + 1] = {
+                target = target,
+                idx = TargetIndex(ctx, target),
+                row = r,
+                score = score,
+                finalist = fin[target] or false,
+                sort = score or -1,
+            }
+        end
+    end
+
+    ---- maior score primeiro; descartados (sem score) caem para o fim
+    table.sort(rows, function(a, b)
+        if a.sort ~= b.sort then
+            return a.sort > b.sort
+        end
+        return tostring(a.target.session_id) < tostring(b.target.session_id)
+    end)
+    return rows
+end
+
+---- cartao de detalhe: CTH disparo a disparo + cadeia do score
+local function TargetCard(ctx, d, entry)
+    local target = entry.target
+    local r = entry.row
+    local text = string.format("\n\n<color 255 200 0>Detalhe #%s %s</color>  %s",
+                               num(entry.idx), tostring(target.session_id),
+                               link("SetTargetFocus", target.handle, "[fechar]", 150, 150, 150))
+
+    ---- CTH por disparo -- capturado por FUNCTION_ScoreAttacksDetailed sob RATOAI_Debug
+    local shots = ctx.cth_attacks_at and ctx.cth_attacks_at[d] and ctx.cth_attacks_at[d][target]
+    local aims = ctx.aims_at and ctx.aims_at[d] and ctx.aims_at[d][target]
+
+    if shots and #shots > 0 then
+        local soma = 0
+        text = text .. "\n<color 120 120 120>  disparo  mira   CTH</color>"
+        for i, cth in ipairs(shots) do
+            soma = soma + cth
+            text = text .. string.format("\n    %-6d %-5s %4d", i, num(aims and aims[i]), cth)
+        end
+        text = text .. string.format("\n  soma dos disparos: %d", soma)
+        if r.hit then
+            ---- o recoil nao entra no CTH de cada disparo: e somado a parte, sobre a
+            ---- soma. A diferenca abaixo e derivada, nao remontada -- se der 0, nao
+            ---- houve penalidade neste par.
+            text = text .. string.format("\n  recoil aplicado:   %d", r.hit - soma)
+            text = text .. string.format("\n  = hit_score:       %d  (acertos esperados %d.%02d)",
+                                         r.hit, (r.hit - r.hit % 100) / 100, r.hit % 100)
+        end
+    else
+        text = text .. "\n  <color 150 150 150>(sem CTH por disparo -- alvo descartado antes de pontuar)</color>"
+    end
+
+    ---- cadeia do score
+    local c = r.chain
+    if c then
+        text = text .. "\n\n<color 255 200 0>  cadeia do score</color>"
+        text = text .. string.format("\n    soma de CTH (hit_score)   %6s", num(c.hit))
+        text = text .. string.format("\n    + pos_mod (stance)        %6s", num(c.pos))
+        text = text .. string.format("\n    x TargetBaseScore         %6s", num(c.base))
+        text = text .. string.format("\n    + TargetingPolicies       %6s", num(c.pol))
+        for _, p in ipairs(c.pol_parts or empty_table) do
+            text = text .. string.format("\n        %-22s %+6d", tostring(p.name), p.value)
+        end
+        if c.downed then
+            text = text .. string.format("\n    x 5%% (alvo caido)         %6s", num(c.downed))
+        end
+        if c.ff then
+            text = text .. string.format("\n    x fogo amigo              %6s", num(c.ff))
+        end
+        text = text .. string.format("\n    x randomizacao %3s%%       %6s", num(c.rnd_pct),
+                                     num(c.rnd))
+        if c.group then
+            text = text .. string.format("\n    x grupo %3s%%              %6s", num(c.group_pct),
+                                         num(c.group))
+        end
+        text = text .. string.format("\n    <color 255 255 255>= score final             %6s</color>",
+                                     num(c.final))
+    elseif r.reject then
+        text = text .. string.format("\n\n  <color 255 150 150>descartado: %s</color>", r.reject)
+    end
+
+    return text
+end
+
 local function PageAlvo(self, text)
     local ctx = self.ai_context
     local d, is_current = EvalDestOf(ctx)
@@ -1538,9 +1733,10 @@ local function PageAlvo(self, text)
     ---- (IModeAIDebug:Process). Sem ele -- HoldPositionAI -- calculamos aqui.
     if not ctx.dbg_enemy_damage_score then
         ctx.dbg_enemy_damage_score = {}
-        pcall(AIPrecalcDamageScore, ctx, {d}, nil, ctx.dbg_enemy_damage_score)
+        self:PrecalcForDebug({d})
     end
 
+    local dbg_dest = ctx.dbg_targets and ctx.dbg_targets[d]
     local chosen = ctx.dest_target and ctx.dest_target[d]
     local hits = ctx.dest_hit_score and ctx.dest_hit_score[d]
 
@@ -1550,8 +1746,20 @@ local function PageAlvo(self, text)
     else
         text = text .. "\n\n<color 255 200 0>No destino escolhido</color>"
     end
+
+    if dbg_dest then
+        text = text .. string.format("\n  AP no destino: %s   custo do ataque: %s",
+                                     format_ap(dbg_dest.ap), format_ap(dbg_dest.cost_ap))
+        if dbg_dest.no_ap then
+            text = text .. "  <color 255 150 150>(AP insuficiente -- nenhum alvo avaliado)</color>"
+        end
+    end
+
     text = text .. string.format("\n  alvo: <color 0 255 0>%s</color>",
                                  IsValid(chosen) and chosen.session_id or "nenhum")
+    if dbg_dest and dbg_dest.preferred then
+        text = text .. " <color 150 150 150>(preferred_target -- imposto, sem sorteio)</color>"
+    end
     text = text .. string.format("\n  dest_target_score: %s",
                                  tostring(ctx.dest_target_score and ctx.dest_target_score[d]))
     text = text ..
@@ -1569,37 +1777,92 @@ local function PageAlvo(self, text)
     text = text ..
                string.format("\n  ataques permitidos (max_attacks): %s", tostring(ctx.max_attacks))
 
-    ---- por-alvo naquele destino. dest_target_dist / _cover_score / _los sao campos
-    ---- do AIPrecalcDamageScore do Rato AI Overhaul; sem ele, ficam nil.
+    ---- O SORTEIO. best_target nao e o de maior score: e um sorteio ponderado entre os
+    ---- finalistas (>= AIDecisionThreshold do melhor). Sem estes tres numeros nao ha
+    ---- como separar "o scoring escolheu mal" de "o dado caiu assim".
+    if dbg_dest and dbg_dest.total then
+        text = text .. string.format(
+                   "\n  <color 255 200 0>sorteio:</color> corte %s (%d%% de %s) | roll %s de %s | %d finalistas",
+                   num(dbg_dest.threshold), const.AIDecisionThreshold, num(dbg_dest.best_score),
+                   num(dbg_dest.roll), num(dbg_dest.total), #(dbg_dest.finalists or empty_table))
+    end
+
+    ---- fallback: dist/cover/LOS ainda vem das tabelas antigas quando nao ha dbg_dest
     local dists = ctx.dest_target_dist and ctx.dest_target_dist[d]
     local covers = ctx.dest_target_cover_score and ctx.dest_target_cover_score[d]
     local los = ctx.dest_target_los and ctx.dest_target_los[d]
     local scored = ctx.dbg_enemy_damage_score
 
+    local rows = BuildRows(ctx, dbg_dest, scored)
+
     text = text .. "\n\n<color 255 200 0>Candidatos</color>  (#i = cor na camada de mapa)"
-    text = text .. "\n<color 120 120 120>  #  alvo            dist  cover  LOS  score</color>"
+    text = text ..
+               "\n<color 120 120 120>   #  alvo           dist LOS   cvr | tiros CTH1  hits |  score   p%  situacao</color>"
 
-    for i, enemy in ipairs(ctx.enemies or empty_table) do
-        if IsValid(enemy) then
-            local dist = dists and dists[enemy]
-            local cover = covers and covers[enemy]
-            local l = los and los[enemy]
-            local sc = scored and scored[enemy]
+    local total = dbg_dest and dbg_dest.total or 0
 
-            local marker = (enemy == chosen) and "<color 0 255 0>" or
-                               (sc and "<color 255 255 255>" or "<color 150 150 150>")
+    for _, e in ipairs(rows) do
+        local r = e.row
+        local target = e.target
 
-            text = text .. string.format("\n%s  #%-2d %-14s %5s %6s %4s %6s</color>", marker, i,
-                                         tostring(enemy.session_id):sub(1, 14), dist and
-                                             tostring(MulDivRound(dist, 1, const.SlabSizeX)) or "-",
-                                         cover and tostring(cover) or "-", l and tostring(l) or "-",
-                                         sc and tostring(sc) or "-")
+        local dist = r.dist or (dists and dists[target])
+        local cover = r.cover or (covers and covers[target])
+        local l = r.los
+        if l == nil and los then
+            l = los[target]
         end
+
+        local status, marker
+        if target == chosen then
+            status, marker = "escolhido", "<color 0 255 0>"
+        elseif e.finalist then
+            status, marker = "finalista", "<color 255 255 255>"
+        elseif e.score then
+            status, marker = "abaixo do corte", "<color 170 170 170>"
+        else
+            status, marker = r.reject or "nao avaliado", "<color 130 130 130>"
+        end
+
+        ---- probabilidade real do sorteio: so faz sentido para finalista
+        local pct = (e.finalist and total > 0) and
+                        string.format("%d%%", MulDivRound(e.score or 0, 100, total)) or "-"
+
+        ---- LOS mostrado CRU. `targets_attack_data[k].los` vem do GetLoFData da engine e
+        ---- nao ha garantia de que seja booleano -- se for numerico, `l and "sim"`
+        ---- transformaria um 0 legitimo em "sim".
+        local los_txt = (l == nil) and "-" or tostring(l):sub(1, 4)
+
+        text = text .. string.format("\n%s%s #%-2s %-14s %4s %-4s %-5s| %5s %4s %5s | %6s %4s  %s</color>",
+                                     marker, (target == chosen) and ">" or " ", num(e.idx),
+                                     tostring(target.session_id):sub(1, 14), slabs(dist), los_txt,
+                                     cover_txt(cover), num(r.shots), num(r.cth1), num(r.hit),
+                                     num(e.score), pct, status)
+    end
+
+    ---- links de detalhe numa linha so, para nao alargar a tabela
+    if #rows > 0 then
+        local links = {}
+        for _, e in ipairs(rows) do
+            links[#links + 1] = link("SetTargetFocus", e.target.handle, "#" .. num(e.idx),
+                                     (self.dbg_target_focus == tostring(e.target.handle)) and 255 or
+                                         0, 255, 255)
+        end
+        text = text .. "\n  detalhe: " .. table.concat(links, "  ")
     end
 
     text = text ..
-               "\n\n<color 120 120 120>verde = escolhido | branco = passou o corte de 80% | cinza = descartado</color>"
-    text = text .. "\n<color 120 120 120>score so aparece para quem entrou no sorteio</color>"
+               "\n<color 120 120 120>tiros/CTH1/hits variam com a DISTANCIA -- dois alvos nao sao comparaveis so pela soma</color>"
+
+    ---- cartao do alvo aberto
+    if self.dbg_target_focus then
+        for _, e in ipairs(rows) do
+            if tostring(e.target.handle) == self.dbg_target_focus then
+                text = text .. TargetCard(ctx, d, e)
+                break
+            end
+        end
+    end
+
     return text
 end
 
