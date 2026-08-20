@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 557,
+	'version', 560,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -31,8 +31,8 @@ return PlaceObj('ModDef', {
 	},
 	'default_options', {},
 	'has_data', true,
-	'saved', 1787185608,
-	'code_hash', -638720702748811150,
+	'saved', 1787189594,
+	'code_hash', -2850768605111320061,
 	'affected_resources', {
 		PlaceObj('ModResourcePreset', {
 			'Class', "InventoryItemCompositeDef",

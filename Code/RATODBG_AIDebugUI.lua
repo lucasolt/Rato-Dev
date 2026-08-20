@@ -10,11 +10,9 @@
 ----
 ---- So para teste. Nao publicar.
 ---------------------------------------------------------------------------------------------------
-
 ---------------------------------------------------------------------------------------------------
 -- PARAMETROS  (tudo local; edite aqui e recarregue o mod)
 ---------------------------------------------------------------------------------------------------
-
 ---------------------------------------------------------------------------------------------------
 ---- ESCALA DIVERGENTE
 ----
@@ -31,7 +29,6 @@
 ---- MESMA cor do quadrado, entao tom escuro sobre mapa escuro fica ilegivel. Por isso
 ---- o extremo negativo e vermelho vivo e nao vermelho-sangue.
 ---------------------------------------------------------------------------------------------------
-
 ---- zero exato, ou tile sem valor
 local CLR_ZERO = RGB(125, 128, 132)
 
@@ -46,11 +43,7 @@ local CLR_ZERO = RGB(125, 128, 132)
 ---- O amarelo nao conflita com o vermelho do lado negativo: o par mais proximo entre as
 ---- duas rampas continua sendo o das pontas desbotadas (deltaE 19.7), e nao o amarelo.
 local POS_RAMP = {
-    RGB(152, 170, 160),
-    RGB(200, 215, 115),
-    RGB(232, 240, 55),
-    RGB(120, 240, 130),
-    RGB(0, 250, 200),
+    RGB(152, 170, 160), RGB(200, 215, 115), RGB(232, 240, 55), RGB(120, 240, 130), RGB(0, 250, 200)
 }
 
 ---- negativo: indice 1 = quase zero (cinza avermelhado), 5 = pior (vermelho saturado)
@@ -58,11 +51,7 @@ local POS_RAMP = {
 ---- O extremo puxa para carmim (255,0,72) em vez de vermelho puro: entre (250,40,26) e
 ---- (255,22,22) o olho nao separava nada -- era o mesmo defeito da rampa violeta.
 local NEG_RAMP = {
-    RGB(180, 150, 150),
-    RGB(214, 118, 108),
-    RGB(236, 80, 62),
-    RGB(250, 40, 26),
-    RGB(255, 0, 72),
+    RGB(180, 150, 150), RGB(214, 118, 108), RGB(236, 80, 62), RGB(250, 40, 26), RGB(255, 0, 72)
 }
 
 ---- cortes do gradiente, em % da faixa [min, max]
@@ -93,13 +82,13 @@ local RING_SCALE = 165 ---- % do tamanho do quadrado normal
 local INFL_MODES = {
     {id = "threat", name = "Ameaca", name_cancel = "Ameaca BRUTA"},
     {id = "cover", name = "Cobertura", name_cancel = "Cobertura CANCELOU"},
-    {id = "sum", name = "Ameaca + Cobertura", name_cancel = "LIQUIDO"},
+    {id = "sum", name = "Ameaca + Cobertura", name_cancel = "LIQUIDO"}
 }
 
 ---- uma cor por alvo, estavel dentro do turno (indice em context.enemies)
 local TARGET_COLORS = {
-    RGB(255, 90, 90), RGB(90, 170, 255), RGB(255, 225, 70), RGB(120, 255, 130),
-    RGB(255, 150, 245), RGB(120, 245, 255), RGB(255, 175, 65), RGB(195, 145, 255),
+    RGB(255, 90, 90), RGB(90, 170, 255), RGB(255, 225, 70), RGB(120, 255, 130), RGB(255, 150, 245),
+    RGB(120, 245, 255), RGB(255, 175, 65), RGB(195, 145, 255)
 }
 
 ---------------------------------------------------------------------------------------------------
@@ -684,14 +673,19 @@ end
 -- qualquer pagina.
 ---------------------------------------------------------------------------------------------------
 
-local PAGES = {"Unidade", "Destinos", "Alvo", "Acoes", "Camadas", "Controles"}
+local PAGES = {"Controles", "Unidade", "Destinos", "Alvo", "Acoes", "Camadas"}
+
+---- A pagina que abre por default e a que o "so <nome>" da barra restaura. Resolvida por
+---- NOME e nao por indice: a ordem de PAGES ja mudou uma vez, e indice fixo faria o
+---- default virar silenciosamente outra pagina na proxima vez que mudar.
+local PAGE_DEFAULT = table.find(PAGES, "Unidade") or 1
 
 ---- paginas ativas: conjunto {[indice] = true}. Varias podem ficar ligadas ao mesmo
 ---- tempo; sao concatenadas na ordem em que aparecem em PAGES.
 local function EnabledPages(self)
     local on = self.dbg_pages
     if not on then
-        on = {[1] = true} ---- comeca so na Unidade
+        on = {[PAGE_DEFAULT] = true} ---- comeca so na Unidade
         self.dbg_pages = on
     end
     for i = 1, #PAGES do
@@ -699,7 +693,7 @@ local function EnabledPages(self)
             return on
         end
     end
-    on[1] = true ---- nunca deixa tudo desligado
+    on[PAGE_DEFAULT] = true ---- nunca deixa tudo desligado
     return on
 end
 
@@ -764,7 +758,8 @@ local function TabBar(self)
     end
     local bar = table.concat(out, " ")
     bar = bar .. "\n" .. link("SetDebugPagesAll", nil, "todas", 255, 200, 0)
-    bar = bar .. "  " .. link("SetDebugPagesOnly", 1, "so Unidade", 255, 200, 0)
+    bar = bar .. "  " ..
+              link("SetDebugPagesOnly", PAGE_DEFAULT, "so " .. PAGES[PAGE_DEFAULT], 255, 200, 0)
     return bar
 end
 
@@ -788,9 +783,10 @@ local function PageUnidade(self, text)
         else
             score_text = data.score and tostring(data.score) or "N/A"
         end
-        text = text .. string.format("\n  %s: %s",
-                                     link("UnitForceBehavior", data.index, data.name, 255, 255, 0),
-                                     score_text)
+        text = text ..
+                   string.format("\n  %s: %s",
+                                 link("UnitForceBehavior", data.index, data.name, 255, 255, 0),
+                                 score_text)
     end
 
     text = text .. "\n\n<color 255 200 0>Tempos</color>:"
@@ -860,8 +856,9 @@ local function PageAcoes(self, text)
         end
     end
 
-    text = text .. string.format("\n\n<color 255 200 0>Acoes</color> (%d) -- clique para forcar",
-                                 #ctx.choose_actions)
+    text = text ..
+               string.format("\n\n<color 255 200 0>Acoes</color> (%d) -- clique para forcar",
+                             #ctx.choose_actions)
     text = text .. string.format("\npeso total: %d", total)
 
     for i, descr in ipairs(ctx.choose_actions) do
@@ -920,7 +917,6 @@ end
 -- score_details guarda e que as camadas pintam, entao a soma das linhas bate com o
 -- numero que a camada escreve no tile.
 ---------------------------------------------------------------------------------------------------
-
 
 ---- alturas das duas pontas da linha. A do inimigo na altura do peito (o spheroid de
 ---- pathfind tem 165cm) para a linha nao afundar no terreno; a do tile rente ao chao,
@@ -1113,8 +1109,7 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
 
         ---- portao de LOS: a policy zera o tile inteiro, entao a decomposicao dele
         ---- tambem e zero -- senao o mapa mostraria ameaca num tile que a policy ignora
-        if threat_pol.RequireLOS and g_AIDestEnemyLOSCache and
-            g_AIDestEnemyLOSCache[dest] == false then
+        if threat_pol.RequireLOS and g_AIDestEnemyLOSCache and g_AIDestEnemyLOSCache[dest] == false then
             return {bruta = 0, cancelada = 0, liquida = 0}, {}, {}, {}
         end
 
@@ -1156,7 +1151,6 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
 
     return {bruta = tb, cancelada = tc, liquida = tb + tc}, bruta, cancelada, liquida
 end
-
 
 function IModeAIDebug:InfluencePolicy()
     local ctx = self.ai_context
@@ -1327,8 +1321,9 @@ function IModeAIDebug:DrawInfluenceLines()
     ---- preciso trocar de modo so para comparar
     local head = string.format("%+d", total)
     if cancels then
-        head = head .. string.format("   [bruta %+d | cancelada %+d | liquido %+d]",
-                                     totals.bruta, totals.cancelada, totals.liquida)
+        head = head ..
+                   string.format("   [bruta %+d | cancelada %+d | liquido %+d]", totals.bruta,
+                                 totals.cancelada, totals.liquida)
         if soma_raw == 0 and totals.bruta ~= 0 then
             head = head .. "  (cobertura cancelou TUDO)"
         end
@@ -1336,8 +1331,9 @@ function IModeAIDebug:DrawInfluenceLines()
             head = head .. "  (SeekCover nesta lista: contagem DOBRADA)"
         end
     else
-        head = head .. string.format("   [ameaca %+d | cobertura %+d | soma %+d]",
-                                     totals.bruta, totals.cancelada, totals.liquida)
+        head = head ..
+                   string.format("   [ameaca %+d | cobertura %+d | soma %+d]", totals.bruta,
+                                 totals.cancelada, totals.liquida)
         if not threat_pol then
             head = head .. "  (sem Threat Exposure)"
         end
@@ -1422,11 +1418,11 @@ local function PageCamadas(self, text)
 
     local scope = self.dbg_influence_scope or "opt"
     text = text .. "\n   escopo: " ..
-               link("SetInfluenceScope", "opt", (scope == "opt") and "[OptLoc]" or "OptLoc",
-                    0, 255, 0)
+               link("SetInfluenceScope", "opt", (scope == "opt") and "[OptLoc]" or "OptLoc", 0, 255,
+                    0)
     text = text .. "  " ..
-               link("SetInfluenceScope", "end", (scope == "end") and "[End Turn]" or "End Turn",
-                    0, 255, 255)
+               link("SetInfluenceScope", "end", (scope == "end") and "[End Turn]" or "End Turn", 0,
+                    255, 255)
     text = text .. "\n   pintar no mapa: " ..
                link("ShowAIVoxels", "decomp_opt", "OptLoc", 160, 105, 245)
     text = text .. "  " .. link("ShowAIVoxels", "decomp_end", "End Turn", 160, 105, 245)
@@ -1435,11 +1431,10 @@ local function PageCamadas(self, text)
         text = text .. "\n   <color 255 120 120>nenhuma policy de ameaca/cobertura neste" ..
                    " escopo</color>"
     elseif cancels then
-        text = text .. string.format(
-                   "\n   <color 120 245 255>CoverCancels ON</color>" ..
-                       "  <color 120 120 120>trust %d%% | plato %dt | saturacao %d</color>",
-                   Clamp(infl_pol.CoverTrust or 100, 0, 100), infl_pol.PlateauTiles or 0,
-                   infl_pol:GetSaturation())
+        text = text .. string.format("\n   <color 120 245 255>CoverCancels ON</color>" ..
+                                         "  <color 120 120 120>trust %d%% | plato %dt | saturacao %d</color>",
+                                     Clamp(infl_pol.CoverTrust or 100, 0, 100),
+                                     infl_pol.PlateauTiles or 0, infl_pol:GetSaturation())
         if infl_cover then
             text = text .. "\n   <color 255 120 120>ha uma Seek Cover nesta mesma lista:" ..
                        " contagem DOBRADA</color>"
@@ -1462,7 +1457,8 @@ local function PageCamadas(self, text)
     text = text .. "\n" .. link("ShowAIVoxels", "target_hits", "Acertos esperados")
     text = text .. "   " .. link("ShowAIVoxels", "target_score", "Score de alvo (cru)")
     text = text .. "\n" ..
-               link("ShowAIVoxels", "target_recalc", "Recalcular alvo em TODOS os tiles", 255, 160, 60)
+               link("ShowAIVoxels", "target_recalc", "Recalcular alvo em TODOS os tiles", 255, 160,
+                    60)
     if self.dbg_targets_recalced then
         text = text .. " <color 255 160 60>(hipotetico)</color>"
     end
@@ -1538,20 +1534,20 @@ local function PageAlvo(self, text)
                                  IsValid(chosen) and chosen.session_id or "nenhum")
     text = text .. string.format("\n  dest_target_score: %s",
                                  tostring(ctx.dest_target_score and ctx.dest_target_score[d]))
-    text = text .. string.format("\n  CTH 1o disparo: %s",
-                                 tostring(ctx.dest_cth and ctx.dest_cth[d]))
+    text = text ..
+               string.format("\n  CTH 1o disparo: %s", tostring(ctx.dest_cth and ctx.dest_cth[d]))
     if hits then
         ---- hit_score e "acertos esperados x100"; parte inteira e centesimos, so com
         ---- aritmetica inteira para nao passar float para o %d
         local frac = hits % 100
-        text = text .. string.format("\n  acertos esperados: %d.%02d  (hit_score bruto %d)",
-                                     (hits - frac) / 100, frac, hits)
+        text = text ..
+                   string.format("\n  acertos esperados: %d.%02d  (hit_score bruto %d)",
+                                 (hits - frac) / 100, frac, hits)
     end
-    text = text .. string.format("\n  recoil no alvo: %s",
-                                 tostring(ctx.dest_target_recoil_cth and
-                                              ctx.dest_target_recoil_cth[d]))
-    text = text .. string.format("\n  ataques permitidos (max_attacks): %s",
-                                 tostring(ctx.max_attacks))
+    text = text .. string.format("\n  recoil no alvo: %s", tostring(
+                                     ctx.dest_target_recoil_cth and ctx.dest_target_recoil_cth[d]))
+    text = text ..
+               string.format("\n  ataques permitidos (max_attacks): %s", tostring(ctx.max_attacks))
 
     ---- por-alvo naquele destino. dest_target_dist / _cover_score / _los sao campos
     ---- do AIPrecalcDamageScore do Rato AI Overhaul; sem ele, ficam nil.
@@ -1573,18 +1569,16 @@ local function PageAlvo(self, text)
             local marker = (enemy == chosen) and "<color 0 255 0>" or
                                (sc and "<color 255 255 255>" or "<color 150 150 150>")
 
-            text = text .. string.format("\n%s  #%-2d %-14s %5s %6s %4s %6s</color>",
-                                         marker, i,
-                                         tostring(enemy.session_id):sub(1, 14),
-                                         dist and tostring(MulDivRound(dist, 1, const.SlabSizeX)) or
-                                             "-",
-                                         cover and tostring(cover) or "-",
-                                         l and tostring(l) or "-",
+            text = text .. string.format("\n%s  #%-2d %-14s %5s %6s %4s %6s</color>", marker, i,
+                                         tostring(enemy.session_id):sub(1, 14), dist and
+                                             tostring(MulDivRound(dist, 1, const.SlabSizeX)) or "-",
+                                         cover and tostring(cover) or "-", l and tostring(l) or "-",
                                          sc and tostring(sc) or "-")
         end
     end
 
-    text = text .. "\n\n<color 120 120 120>verde = escolhido | branco = passou o corte de 80% | cinza = descartado</color>"
+    text = text ..
+               "\n\n<color 120 120 120>verde = escolhido | branco = passou o corte de 80% | cinza = descartado</color>"
     text = text .. "\n<color 120 120 120>score so aparece para quem entrou no sorteio</color>"
     return text
 end
@@ -1602,8 +1596,9 @@ local function PageControles(self, text)
     return text
 end
 
-local PAGE_FUNCS = {PageUnidade, PageDestinos, PageAlvo, PageAcoes, PageCamadas,
-                    PageControles}
+---- MESMA ordem de PAGES -- as duas sao indexadas pelo mesmo numero
+local PAGE_FUNCS = {PageControles, PageUnidade, PageDestinos, PageAlvo, PageAcoes,
+                    PageCamadas}
 
 ---------------------------------------------------------------------------------------------------
 
@@ -1644,11 +1639,13 @@ function IModeAIDebug:Update()
     end
 
     if not unit:IsAware() then
-        text = text .. string.format("Selected unit: %s, AP = %d", unit.session_id,
-                                     (unit.ActionPoints / const.Scale.AP))
+        text = text ..
+                   string.format("Selected unit: %s, AP = %d", unit.session_id,
+                                 (unit.ActionPoints / const.Scale.AP))
         text = text .. string.format("\n   Archetype: %s (Unaware)", unit:GetArchetype().id)
-        text = text .. string.format("\n   AI Keywords: %s",
-                                     table.concat(unit.AIKeywords or empty_table, ","))
+        text = text ..
+                   string.format("\n   AI Keywords: %s",
+                                 table.concat(unit.AIKeywords or empty_table, ","))
         text = text .. "\n\n" .. link("WakeUp", nil, "Alert")
         text = text .. "   " .. link("WakeUp", "reposition", "Alert+Reposition")
         ctrl:SetText(text)
@@ -1656,11 +1653,13 @@ function IModeAIDebug:Update()
     end
 
     if not self.ai_context then
-        text = text .. string.format("Selected unit: %s, AP = %d", unit.session_id,
-                                     (unit.ActionPoints / const.Scale.AP))
+        text = text ..
+                   string.format("Selected unit: %s, AP = %d", unit.session_id,
+                                 (unit.ActionPoints / const.Scale.AP))
         text = text .. string.format("\n   Archetype: %s (AI disabled)", unit:GetArchetype().id)
-        text = text .. string.format("\n   AI Keywords: %s",
-                                     table.concat(unit.AIKeywords or empty_table, ","))
+        text = text ..
+                   string.format("\n   AI Keywords: %s",
+                                 table.concat(unit.AIKeywords or empty_table, ","))
         ctrl:SetText(text)
         return
     end
