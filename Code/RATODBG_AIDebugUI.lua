@@ -77,9 +77,24 @@ local PANEL_MAX_WIDTH = 700
 local CLR_FINALIST = RGB(255, 255, 255)
 local RING_SCALE = 165 ---- % do tamanho do quadrado normal
 
----- policies somadas na camada "soma". Sao os GetEditorView() delas -- os mesmos
----- rotulos que aparecem no score_details. Mudou o GetEditorView, muda aqui.
-local SUM_LABELS = {"Custom Seek Cover", "Threat Exposure"}
+---- Os tres modos existem nos DOIS regimes, mas significam coisas diferentes:
+----
+----   duas policies (CoverCancels desligado)
+----     threat = a fatia da AIPolicyThreatExposure
+----     cover  = a fatia da AIPolicyCustomSeekCover
+----     sum    = as duas somadas
+----
+----   uma policy so (CoverCancels ligado)
+----     threat = a ameaca BRUTA do inimigo, como se nao houvesse cobertura nenhuma
+----     cover  = quanto a cobertura CANCELOU dessa ameaca (credito, positivo)
+----     sum    = o que sobrou de fato, e o que a policy devolve
+----
+---- Nos dois regimes vale `threat + cover = sum`, por inimigo e no total.
+local INFL_MODES = {
+    {id = "threat", name = "Ameaca", name_cancel = "Ameaca BRUTA"},
+    {id = "cover", name = "Cobertura", name_cancel = "Cobertura CANCELOU"},
+    {id = "sum", name = "Ameaca + Cobertura", name_cancel = "LIQUIDO"},
+}
 
 ---- uma cor por alvo, estavel dentro do turno (indice em context.enemies)
 local TARGET_COLORS = {
@@ -453,32 +468,40 @@ function IModeAIDebug:ShowAIVoxels(group)
             return found and total or nil
         end)
 
-    elseif group == "sum_cover_threat_end" or group == "sum_cover_threat_opt" then
-        local is_end = group == "sum_cover_threat_end"
-        local score_tbl = (is_end and self.think_data.reachable_scores or
-                              self.think_data.optimal_scores) or empty_table
+    elseif group == "decomp_end" or group == "decomp_opt" then
+        ------------------------------------------------------------------------------
+        ---- DECOMPOSICAO -- pinta o slab com o componente selecionado no modo mestre
+        ----
+        ---- Substituiu a camada "Soma": somar as duas policies era o caso particular
+        ---- `liquido` desta. E o escopo/modo daqui sao os MESMOS que as linhas de
+        ---- rollover usam, entao o numero do slab e a soma das linhas dele batem.
+        ------------------------------------------------------------------------------
+        local is_end = group == "decomp_end"
         local dests = is_end and (ctx.destinations or empty_table) or
                           (ctx.all_destinations or ctx.destinations or empty_table)
 
-        self.dbg_layer_label = table.concat(SUM_LABELS, " + ") ..
-                                   (is_end and " <EndTurn>" or " <OptLoc>")
+        ---- a camada segue o escopo do modo mestre, para nao existirem dois escopos
+        self.dbg_influence_scope = is_end and "end" or "opt"
+        local mode = self.dbg_influence or "sum"
+        local threat_pol, cancels, cover_pol = self:InfluencePolicy()
+
+        if not threat_pol and not cover_pol then
+            self.dbg_layer_label = "nenhuma policy de ameaca/cobertura neste escopo"
+            self:Update()
+            return
+        end
+
+        local nome
+        for _, m in ipairs(INFL_MODES) do
+            if m.id == mode then
+                nome = (cancels and m.name_cancel) or m.name
+            end
+        end
+        self.dbg_layer_label = string.format("%s%s", tostring(nome),
+                                             is_end and "  <EndTurn>" or "  <OptLoc>")
 
         NumericLayer(self, fx, dests, function(dest)
-            local scores = score_tbl[dest]
-            if not scores then
-                return nil
-            end
-            ---- nil quando NENHUMA das duas rodou neste tile: pintar 0 ali diria
-            ---- "equilibrado" quando o certo e "sem dado"
-            local total, found = 0, false
-            for _, label in ipairs(SUM_LABELS) do
-                local v = PolicyValue(scores, label)
-                if v then
-                    total = total + v
-                    found = true
-                end
-            end
-            return found and total or nil
+            return self:DecompValue(dest, nil, mode)
         end)
 
         ------------------------------------------------------------------------------
@@ -879,8 +902,8 @@ end
 --   threat -- so a AIPolicyThreatExposure   (sempre <= 0)
 --   cover  -- so a AIPolicyCustomSeekCover  (>= 0, salvo ExposedAtCloseRange)
 --   sum    -- os dois somados por inimigo. Este e o que responde "contra QUEM este tile
---             me protege e contra quem nao", que a camada `sum_cover_threat_*` so
---             responde no agregado.
+--             me protege e contra quem nao", que o agregado do tile sozinho nao
+--             responde.
 --
 -- COMO O NUMERO E OBTIDO -- e a parte que importa para ele nao mentir:
 --
@@ -898,11 +921,6 @@ end
 -- numero que a camada escreve no tile.
 ---------------------------------------------------------------------------------------------------
 
-local INFL_MODES = {
-    {id = "threat", name = "Ameaca"},
-    {id = "cover", name = "Cobertura"},
-    {id = "sum", name = "Ameaca + Cobertura"},
-}
 
 ---- alturas das duas pontas da linha. A do inimigo na altura do peito (o spheroid de
 ---- pathfind tem 165cm) para a linha nao afundar no terreno; a do tile rente ao chao,
@@ -1017,6 +1035,171 @@ local function InfluenceShares(pol, context, dest, grid_voxel, raw)
     return out, total, true
 end
 
+---- Policy de ameaca do escopo ativo, e se ela esta no regime CoverCancels. Usado tanto
+---- pelo desenho quanto pelos rotulos do painel, para os dois nunca discordarem.
+---------------------------------------------------------------------------------------------------
+---- DECOMPOSICAO -- nucleo compartilhado pelo TILE e pelas LINHAS
+----
+---- Um so lugar calcula, para um destino: quanto de ameaca BRUTA existe ali, quanto a
+---- cobertura CANCELOU, e quanto sobra LIQUIDO. A camada de mapa e as linhas de rollover
+---- consomem exatamente esta funcao -- e o que garante que o numero pintado no slab e a
+---- soma das linhas que saem dele sejam o MESMO numero. Enquanto eram dois caminhos de
+---- calculo, nada impedia de divergirem em silencio.
+----
+---- Funciona nos dois regimes:
+----
+----   CoverCancels LIGADO  -- uma policy so. `bruta` e a rampa crua, `liquida` e a rampa
+----     ja descontada da cobertura, e cada total passa pela normalizacao da PROPRIA
+----     policy (mesma saturacao, mesmo clamp, mesmo Weight).
+----
+----   CoverCancels DESLIGADO -- duas policies. `bruta` e a AIPolicyThreatExposure e
+----     `cancelada` e a AIPolicyCustomSeekCover, cada uma com o EvalDest dela. E o que a
+----     antiga camada "Soma" mostrava, agora decomposta em vez de so somada.
+----
+---- TOTAIS: cada componente e normalizado pela formula da policy, e nao por rateio de um
+---- sobre o outro. Isso remove a singularidade do caso "cobertura cancelou tudo" (a soma
+---- liquida vai a zero e nao havia por onde dividir) e faz `bruta + cancelada = liquido`
+---- valer sempre, por construcao -- `cancelada` e DEFINIDA como a diferenca.
+---------------------------------------------------------------------------------------------------
+
+---- normalizacao da AIPolicyThreatExposure aplicada a uma soma de rampas qualquer:
+---- e a mesma linha do EvalDest dela, incluindo clamp de saturacao e Weight
+local function ThreatNormalize(pol, soma)
+    if not soma or soma <= 0 then
+        return 0
+    end
+    local sat = pol:GetSaturation()
+    return MulDivRound(MulDivRound(pol.Penalty, Min(soma, sat), sat), pol.Weight or 100, 100)
+end
+
+---- Devolve: totais {bruta, cancelada, liquida} e as tabelas por inimigo de cada um.
+---- `nil` no primeiro retorno = nao ha policy para responder neste escopo.
+local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
+    if not dest then
+        return nil
+    end
+    local target_pos = InflValidZ(DestToPoint(dest))
+    if not IsValidPos(target_pos) then
+        return nil
+    end
+
+    -----------------------------------------------------------------------------------
+    ---- regime de UMA policy
+    -----------------------------------------------------------------------------------
+    if threat_pol and threat_pol.CoverCancels then
+        local _, _, _, stance_idx = stance_pos_unpack(dest)
+        local stance = StancesList[stance_idx]
+        local plateau = (threat_pol.PlateauTiles or 0) * const.SlabSizeX
+
+        local bruta, cancelada, liquida = {}, {}, {}
+        local sb, sl = 0, 0
+        for _, enemy in ipairs(context.enemies or empty_table) do
+            local alive = IsValid(enemy) and not (enemy:IsDead() or enemy:IsDowned())
+            if alive and PolicySeesEnemy(threat_pol, context, enemy) then
+                local att_pos = InflValidZ(enemy:GetPos())
+                if IsValidPos(att_pos) then
+                    local range, is_firearm = threat_pol:GetEnemyRange(enemy)
+                    local ramp = RATOAI_ThreatRamp(att_pos:Dist(target_pos), range, plateau)
+                    local unc = 100
+                    if ramp > 0 then
+                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm)
+                    end
+                    local net = MulDivRound(ramp, unc, 100)
+                    bruta[enemy], liquida[enemy], cancelada[enemy] = ramp, net, ramp - net
+                    sb, sl = sb + ramp, sl + net
+                end
+            end
+        end
+
+        ---- portao de LOS: a policy zera o tile inteiro, entao a decomposicao dele
+        ---- tambem e zero -- senao o mapa mostraria ameaca num tile que a policy ignora
+        if threat_pol.RequireLOS and g_AIDestEnemyLOSCache and
+            g_AIDestEnemyLOSCache[dest] == false then
+            return {bruta = 0, cancelada = 0, liquida = 0}, {}, {}, {}
+        end
+
+        local tb = ThreatNormalize(threat_pol, sb)
+        local tl = ThreatNormalize(threat_pol, sl)
+        return {bruta = tb, cancelada = tl - tb, liquida = tl}, bruta, cancelada, liquida
+    end
+
+    -----------------------------------------------------------------------------------
+    ---- regime de DUAS policies
+    -----------------------------------------------------------------------------------
+    local bruta, cancelada, liquida = {}, {}, {}
+    local tb, tc = 0, 0
+
+    if threat_pol then
+        local raw = ThreatRaw(threat_pol, context, dest, target_pos)
+        local part = InfluenceShares(threat_pol, context, dest, grid_voxel, raw)
+        for enemy, v in pairs(part) do
+            bruta[enemy] = v
+            tb = tb + v
+        end
+    end
+    if cover_pol then
+        local raw = CoverRaw(cover_pol, context, dest, grid_voxel)
+        local part = InfluenceShares(cover_pol, context, dest, grid_voxel, raw)
+        for enemy, v in pairs(part) do
+            cancelada[enemy] = v
+            tc = tc + v
+        end
+    end
+    for enemy, v in pairs(bruta) do
+        liquida[enemy] = v + (cancelada[enemy] or 0)
+    end
+    for enemy, v in pairs(cancelada) do
+        if not bruta[enemy] then
+            liquida[enemy] = v
+        end
+    end
+
+    return {bruta = tb, cancelada = tc, liquida = tb + tc}, bruta, cancelada, liquida
+end
+
+
+function IModeAIDebug:InfluencePolicy()
+    local ctx = self.ai_context
+    if not ctx or not self.selected_unit then
+        return nil, false
+    end
+    local list
+    if (self.dbg_influence_scope or "opt") == "end" then
+        list = ctx.behavior and ctx.behavior.EndTurnPolicies or empty_table
+    else
+        list = self.selected_unit:GetArchetype().OptLocPolicies
+    end
+    local pol = FindPolicy(list, "AIPolicyThreatExposure")
+    return pol, (pol and pol.CoverCancels) and true or false,
+           FindPolicy(list, "AIPolicyCustomSeekCover"), list
+end
+
+---- Decomposicao deste destino no escopo ativo. Ponto unico de entrada da camada de
+---- mapa e das linhas -- os dois passam por aqui, entao nao ha como divergirem.
+function IModeAIDebug:DecomposeAt(dest, grid_voxel)
+    local threat_pol, _, cover_pol = self:InfluencePolicy()
+    if not threat_pol and not cover_pol then
+        return nil
+    end
+    return Decompose(threat_pol, cover_pol, self.ai_context, dest, grid_voxel)
+end
+
+---- So o componente pedido. E METODO, e nao local, de proposito: a camada de mapa vive
+---- em ShowAIVoxels, que e definida bem acima daqui no arquivo -- uma local declarada
+---- depois nao seria visivel la dentro (viraria busca de global, nil em runtime).
+function IModeAIDebug:DecompValue(dest, grid_voxel, mode)
+    local totals = self:DecomposeAt(dest, grid_voxel)
+    if not totals then
+        return nil
+    end
+    if mode == "threat" then
+        return totals.bruta
+    elseif mode == "cover" then
+        return totals.cancelada
+    end
+    return totals.liquida
+end
+
 function IModeAIDebug:ClearInfluenceFx()
     for _, fx in ipairs(self.dbg_infl_fx or empty_table) do
         DoneObject(fx)
@@ -1025,16 +1208,30 @@ function IModeAIDebug:ClearInfluenceFx()
 end
 
 ---- arg: "threat" | "cover" | "sum" -- clicar no modo ativo desliga
+---- Modo e escopo sao MESTRES: valem para as linhas e para a camada de mapa. Se a
+---- camada estiver no ar, ela e repintada -- senao o slab mostraria um componente e a
+---- linha outro, que e exatamente a divergencia que esta secao existe para evitar.
+local function RefreshDecomp(self)
+    self:DrawInfluenceLines()
+    if self.dbg_layer == "decomp_opt" or self.dbg_layer == "decomp_end" then
+        self:ShowAIVoxels(self.dbg_layer)
+    else
+        self:Update()
+    end
+end
+
 function IModeAIDebug:SetInfluenceMode(arg)
     self.dbg_influence = (self.dbg_influence ~= arg) and arg or nil
-    self:DrawInfluenceLines()
-    self:Update()
+    RefreshDecomp(self)
 end
 
 function IModeAIDebug:SetInfluenceScope(arg)
     self.dbg_influence_scope = arg
-    self:DrawInfluenceLines()
-    self:Update()
+    ---- a camada carrega o escopo no proprio id; trocar o escopo troca a camada
+    if self.dbg_layer == "decomp_opt" or self.dbg_layer == "decomp_end" then
+        self.dbg_layer = (arg == "end") and "decomp_end" or "decomp_opt"
+    end
+    RefreshDecomp(self)
 end
 
 function IModeAIDebug:DrawInfluenceLines()
@@ -1053,55 +1250,56 @@ function IModeAIDebug:DrawInfluenceLines()
                      stance_pos_pack(x, y, z, StancesList[ctx.archetype.PrefStance])
     local gx, gy, gz = WorldToVoxel(x, y, z)
     local grid_voxel = point_pack(gx, gy, gz)
-
     local tile_pos = InflValidZ(DestToPoint(dest))
-    local target_pos = tile_pos
 
-    ---- `and/or` nao serve aqui: com o escopo em End Turn e um behavior sem
-    ---- EndTurnPolicies, o `or` cairia no OptLoc e mostraria numero da OUTRA lista de
-    ---- policies sem nada indicando a troca. Lista vazia e a resposta honesta -- as
-    ---- policies aparecem como ausentes no rotulo.
-    local scope = self.dbg_influence_scope or "opt"
-    local list
-    if scope == "end" then
-        list = ctx.behavior and ctx.behavior.EndTurnPolicies or empty_table
+    local threat_pol, cancels, cover_pol = self:InfluencePolicy()
+    local totals, bruta, cancelada, liquida = self:DecomposeAt(dest, grid_voxel)
+
+    local fx = {}
+    if not totals then
+        fx[#fx + 1] = PlaceTextFx("sem policy de ameaca/cobertura neste escopo",
+                                  tile_pos:AddZ(INFL_Z_ENEMY + 40 * guic), CLR_ZERO)
+        self.dbg_infl_fx = fx
+        return
+    end
+
+    ---- MESMA fonte que a camada de mapa: `Decompose`. O slab e as linhas que saem dele
+    ---- nao tem como mostrar numeros diferentes porque ha um calculo so.
+    local per, total
+    if mode == "threat" then
+        per, total = bruta, totals.bruta
+    elseif mode == "cover" then
+        per, total = cancelada, totals.cancelada
     else
-        list = self.selected_unit:GetArchetype().OptLocPolicies
+        per, total = liquida, totals.liquida
     end
 
-    local threat_pol = FindPolicy(list, "AIPolicyThreatExposure")
-    local cover_pol = FindPolicy(list, "AIPolicyCustomSeekCover")
-
-    ---- soma por inimigo dos modos pedidos
-    local shares, total, missing = {}, 0, {}
-    local unsplit = false
-
-    local function add(pol, raw_fn, label)
-        if not pol then
-            missing[#missing + 1] = label
-            return
-        end
-        local part, part_total, split = InfluenceShares(pol, ctx, dest, grid_voxel, raw_fn(pol))
-        for enemy, v in pairs(part) do
-            shares[enemy] = (shares[enemy] or 0) + v
-        end
-        total = total + part_total
-        ---- a policy pontuou mas nenhum inimigo carregou peso (last_known_enemy_pos, ou
-        ---- sinais que se cancelaram): ha total sem linha nenhuma que o explique
-        if not split and part_total ~= 0 then
-            unsplit = true
-        end
+    ---- As parcelas por inimigo vem em unidades CRUAS no regime de uma policy (rampas) e
+    ---- ja em unidades de score no regime de duas. Ratear pelo proprio somatorio resolve
+    ---- os dois casos com o mesmo codigo, e faz a soma das linhas fechar o total exato.
+    local soma_raw = 0
+    for _, v in pairs(per or empty_table) do
+        soma_raw = soma_raw + v
     end
 
-    if mode == "threat" or mode == "sum" then
-        add(threat_pol, function(pol)
-            return ThreatRaw(pol, ctx, dest, target_pos)
-        end, "Threat Exposure")
-    end
-    if mode == "cover" or mode == "sum" then
-        add(cover_pol, function(pol)
-            return CoverRaw(pol, ctx, dest, grid_voxel)
-        end, "Custom Seek Cover")
+    local shares = {}
+    if soma_raw ~= 0 then
+        local assigned, biggest, biggest_v = 0, nil, 0
+        for enemy, v in pairs(per) do
+            if v ~= 0 then
+                local sh = MulDivRound(total, v, soma_raw)
+                shares[enemy] = sh
+                assigned = assigned + sh
+                if not biggest or abs(v) > abs(biggest_v) then
+                    biggest, biggest_v = enemy, v
+                end
+            end
+        end
+        ---- sobra de arredondamento no maior termo: o painel promete que as linhas somam
+        ---- o numero do tile, e um painel de conferencia que nao fecha e pior que nenhum
+        if biggest and assigned ~= total then
+            shares[biggest] = shares[biggest] + (total - assigned)
+        end
     end
 
     local vmin, vmax
@@ -1110,15 +1308,14 @@ function IModeAIDebug:DrawInfluenceLines()
         vmax = vmax and Max(vmax, v) or v
     end
 
-    local fx = {}
     for _, enemy in ipairs(ctx.enemies or empty_table) do
         local v = shares[enemy]
         if v and IsValid(enemy) then
             local from = InflValidZ(enemy:GetPos()):AddZ(INFL_Z_ENEMY)
             local to = tile_pos:AddZ(INFL_Z_TILE)
             ---- escala por TILE e nao pelo mapa: a pergunta aqui e quem domina ESTE
-            ---- tile. Normalizar pelo mapa deixaria todas as linhas desbotadas nos
-            ---- tiles tranquilos, que sao justamente os que interessa comparar.
+            ---- tile. Normalizar pelo mapa deixaria tudo desbotado nos tiles tranquilos,
+            ---- que sao justamente os que interessa comparar.
             local color = ScoreColor(v, vmin, vmax)
             fx[#fx + 1] = PlaceLineFX(from, to, color)
             fx[#fx + 1] = PlaceTextFx(string.format("#%d %+d", TargetIndex(ctx, enemy) or 0, v),
@@ -1126,23 +1323,30 @@ function IModeAIDebug:DrawInfluenceLines()
         end
     end
 
-    ---- total no proprio tile: e o numero que a camada da policy (ou a de soma) escreve
-    ---- neste slab, entao os dois tem que bater. As ressalvas vao juntas em vez de
-    ---- substituir o total -- em modo `sum` com uma das policies ausente o total ainda
-    ---- vale, e so nao vale pelo que o nome do modo promete.
-    if next(shares) or #missing > 0 or unsplit then
-        local head = string.format("%+d", total)
-        if #missing > 0 then
-            head = head .. "  (sem " .. table.concat(missing, " / ") .. ")"
+    ---- cabecalho no tile: o total do MODO, mais os tres componentes juntos para nao ser
+    ---- preciso trocar de modo so para comparar
+    local head = string.format("%+d", total)
+    if cancels then
+        head = head .. string.format("   [bruta %+d | cancelada %+d | liquido %+d]",
+                                     totals.bruta, totals.cancelada, totals.liquida)
+        if soma_raw == 0 and totals.bruta ~= 0 then
+            head = head .. "  (cobertura cancelou TUDO)"
         end
-        if unsplit then
-            head = head .. "  (sem rateio por inimigo)"
+        if cover_pol then
+            head = head .. "  (SeekCover nesta lista: contagem DOBRADA)"
         end
-        ---- o total entra na propria faixa: sendo a soma, quase sempre e o extremo, e
-        ---- ficaria saturado no maximo escalado so contra as parcelas
-        local color = ScoreColor(total, Min(vmin or 0, total), Max(vmax or 0, total))
-        fx[#fx + 1] = PlaceTextFx(head, tile_pos:AddZ(INFL_Z_ENEMY + 40 * guic), color)
+    else
+        head = head .. string.format("   [ameaca %+d | cobertura %+d | soma %+d]",
+                                     totals.bruta, totals.cancelada, totals.liquida)
+        if not threat_pol then
+            head = head .. "  (sem Threat Exposure)"
+        end
+        if not cover_pol then
+            head = head .. "  (sem Seek Cover)"
+        end
     end
+    fx[#fx + 1] = PlaceTextFx(head, tile_pos:AddZ(INFL_Z_ENEMY + 40 * guic),
+                              ScoreColor(total, Min(vmin or 0, total), Max(vmax or 0, total)))
 
     self.dbg_infl_fx = fx
 end
@@ -1198,33 +1402,59 @@ local function PageCamadas(self, text)
     text = text .. "\n" .. link("ShowAIVoxels", "pathtotarget", "Path to Target")
     text = text .. "   " .. link("ClearAILayer", nil, "Limpar", 255, 120, 120)
 
-    ---- balanco cobertura vs exposicao: as duas policies medem lados opostos da mesma
-    ---- pergunta, entao a soma delas e mais legivel que as duas camadas separadas
-    text = text .. "\n\n<color 160 105 245>Soma</color> " ..
-               table.concat(SUM_LABELS, " + ") .. ":"
-    text = text .. "\n" .. link("ShowAIVoxels", "sum_cover_threat_opt", "OptLoc")
-    text = text .. "   " .. link("ShowAIVoxels", "sum_cover_threat_end", "End Turn")
-
-    ---- por inimigo, no tile sob o mouse
-    text = text .. "\n\n<color 120 245 255>Linhas de influencia</color> (rollover):"
+    -----------------------------------------------------------------------------------
+    ---- DECOMPOSICAO -- um modo mestre que governa o TILE e a LINHA ao mesmo tempo
+    ----
+    ---- Substituiu a antiga secao "Soma": somar as duas policies era o caso particular
+    ---- `liquido` desta. Modo e escopo sao unicos, entao o slab pintado e as linhas do
+    ---- rollover falam sempre do mesmo numero.
+    -----------------------------------------------------------------------------------
+    local infl_pol, cancels, infl_cover = self:InfluencePolicy()
+    text = text .. "\n\n<color 160 105 245>Decomposicao</color> (tile + rollover):"
     text = text .. "\n "
     for _, m in ipairs(INFL_MODES) do
         local on = self.dbg_influence == m.id
+        local nome = (cancels and m.name_cancel) or m.name
         text = text .. "  " ..
-                   link("SetInfluenceMode", m.id, on and ("[" .. m.name .. "]") or m.name,
-                        on and 120 or 0, on and 245 or 255, on and 255 or 255)
+                   link("SetInfluenceMode", m.id, on and ("[" .. nome .. "]") or nome,
+                        on and 160 or 0, on and 105 or 255, on and 245 or 255)
     end
-    if self.dbg_influence then
-        local scope = self.dbg_influence_scope or "opt"
-        text = text .. "\n   escopo: " ..
-                   link("SetInfluenceScope", "opt",
-                        (scope == "opt") and "[OptLoc]" or "OptLoc", 0, 255, 0)
-        text = text .. "  " ..
-                   link("SetInfluenceScope", "end",
-                        (scope == "end") and "[End Turn]" or "End Turn", 0, 255, 255)
-        text = text .. "\n   <color 120 120 120>valores ja com o Weight da policy;" ..
-                   " cor normalizada dentro do tile</color>"
+
+    local scope = self.dbg_influence_scope or "opt"
+    text = text .. "\n   escopo: " ..
+               link("SetInfluenceScope", "opt", (scope == "opt") and "[OptLoc]" or "OptLoc",
+                    0, 255, 0)
+    text = text .. "  " ..
+               link("SetInfluenceScope", "end", (scope == "end") and "[End Turn]" or "End Turn",
+                    0, 255, 255)
+    text = text .. "\n   pintar no mapa: " ..
+               link("ShowAIVoxels", "decomp_opt", "OptLoc", 160, 105, 245)
+    text = text .. "  " .. link("ShowAIVoxels", "decomp_end", "End Turn", 160, 105, 245)
+
+    if not infl_pol and not infl_cover then
+        text = text .. "\n   <color 255 120 120>nenhuma policy de ameaca/cobertura neste" ..
+                   " escopo</color>"
+    elseif cancels then
+        text = text .. string.format(
+                   "\n   <color 120 245 255>CoverCancels ON</color>" ..
+                       "  <color 120 120 120>trust %d%% | plato %dt | saturacao %d</color>",
+                   Clamp(infl_pol.CoverTrust or 100, 0, 100), infl_pol.PlateauTiles or 0,
+                   infl_pol:GetSaturation())
+        if infl_cover then
+            text = text .. "\n   <color 255 120 120>ha uma Seek Cover nesta mesma lista:" ..
+                       " contagem DOBRADA</color>"
+        end
+    else
+        text = text .. "\n   <color 120 120 120>duas policies (CoverCancels off)</color>"
+        if not infl_pol then
+            text = text .. " <color 255 120 120>sem Threat Exposure</color>"
+        end
+        if not infl_cover then
+            text = text .. " <color 255 120 120>sem Seek Cover</color>"
+        end
     end
+    text = text .. "\n   <color 120 120 120>bruta + cancelada = liquido | valores ja com" ..
+               " o Weight | linhas somam o numero do tile</color>"
 
     text = text .. "\n\n<color 255 160 60>Alvo</color> (por tile alcancavel):"
     text = text .. "\n" .. link("ShowAIVoxels", "target_who", "Quem seria o alvo")
