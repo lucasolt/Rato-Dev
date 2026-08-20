@@ -680,12 +680,32 @@ local PAGES = {"Controles", "Unidade", "Destinos", "Alvo", "Acoes", "Camadas"}
 ---- default virar silenciosamente outra pagina na proxima vez que mudar.
 local PAGE_DEFAULT = table.find(PAGES, "Unidade") or 1
 
+---- Paginas ligadas quando o painel abre. Resolvidas por NOME e nao por indice, pela
+---- mesma razao do PAGE_DEFAULT: a ordem de PAGES ja mudou uma vez, e indice fixo faria
+---- o painel abrir em outra pagina sem ninguem perceber.
+local PAGE_STARTUP = {"Controles", "Camadas"}
+
+local function StartupPages()
+    local on = {}
+    for _, name in ipairs(PAGE_STARTUP) do
+        local i = table.find(PAGES, name)
+        if i then
+            on[i] = true
+        end
+    end
+    ---- nome errado em PAGE_STARTUP nao pode abrir o painel vazio
+    if not next(on) then
+        on[PAGE_DEFAULT] = true
+    end
+    return on
+end
+
 ---- paginas ativas: conjunto {[indice] = true}. Varias podem ficar ligadas ao mesmo
 ---- tempo; sao concatenadas na ordem em que aparecem em PAGES.
 local function EnabledPages(self)
     local on = self.dbg_pages
     if not on then
-        on = {[PAGE_DEFAULT] = true} ---- comeca so na Unidade
+        on = StartupPages()
         self.dbg_pages = on
     end
     for i = 1, #PAGES do
