@@ -1671,19 +1671,35 @@ local function TargetCard(ctx, d, entry)
 
     if shots and #shots > 0 then
         local soma = 0
-        text = text .. "\n<color 120 120 120>  disparo  mira   CTH</color>"
-        for i, cth in ipairs(shots) do
-            soma = soma + cth
-            text = text .. string.format("\n    %-6d %-5s %4d", i, num(aims and aims[i]), cth)
+        ---- `CTH` e a bala LIDER do ataque; `rajada` e o que aquele ataque rendeu
+        ---- depois de expandido bala a bala (BUGFIX B21). Em arma de tiro unico os
+        ---- dois sao iguais e a coluna some.
+        local balas = ctx.burst_shots or 1
+        local bursts = ctx.burst_hits_at and ctx.burst_hits_at[d] and
+                           ctx.burst_hits_at[d][target]
+        if balas > 1 then
+            text = text .. string.format(
+                       "\n<color 120 120 120>  atq mira  CTH  rajada x%d</color>", balas)
+        else
+            text = text .. "\n<color 120 120 120>  atq mira  CTH</color>"
         end
-        text = text .. string.format("\n  soma dos disparos: %d", soma)
+        for i, cth in ipairs(shots) do
+            local exp = (bursts and bursts[i]) or cth
+            soma = soma + exp
+            if balas > 1 then
+                text = text .. string.format("\n   %-3d %-4s %4d %8d", i,
+                                             num(aims and aims[i]), cth, exp)
+            else
+                text = text .. string.format("\n   %-3d %-4s %4d", i,
+                                             num(aims and aims[i]), cth)
+            end
+        end
         if r.hit then
-            ---- o recoil nao entra no CTH de cada disparo: e somado a parte, sobre a
-            ---- soma. A diferenca abaixo e derivada, nao remontada -- se der 0, nao
-            ---- houve penalidade neste par.
-            text = text .. string.format("\n  recoil aplicado:   %d", r.hit - soma)
-            text = text .. string.format("\n  = hit_score:       %d  (acertos esperados %d.%02d)",
-                                         r.hit, (r.hit - r.hit % 100) / 100, r.hit % 100)
+            ---- `hit - soma` e o recoil aplicado ENTRE ataques; o de DENTRO da rajada
+            ---- ja esta em cada `exp`. Derivado, nao remontado: 0 = nao houve.
+            text = text .. string.format(
+                       "\n  soma %d | recoil pers %s | <color 255 255 255>hit %d</color> = %d.%02d acertos",
+                       soma, tostring((ctx.recoil_loss_at and ctx.recoil_loss_at[d] and ctx.recoil_loss_at[d][target]) or 0), r.hit, (r.hit - r.hit % 100) / 100, r.hit % 100)
         end
     else
         text = text .. "\n  <color 150 150 150>(sem CTH por disparo -- alvo descartado antes de pontuar)</color>"
@@ -1760,22 +1776,13 @@ local function PageAlvo(self, text)
     if dbg_dest and dbg_dest.preferred then
         text = text .. " <color 150 150 150>(preferred_target -- imposto, sem sorteio)</color>"
     end
-    text = text .. string.format("\n  dest_target_score: %s",
-                                 tostring(ctx.dest_target_score and ctx.dest_target_score[d]))
-    text = text ..
-               string.format("\n  CTH 1o disparo: %s", tostring(ctx.dest_cth and ctx.dest_cth[d]))
-    if hits then
-        ---- hit_score e "acertos esperados x100"; parte inteira e centesimos, so com
-        ---- aritmetica inteira para nao passar float para o %d
-        local frac = hits % 100
-        text = text ..
-                   string.format("\n  acertos esperados: %d.%02d  (hit_score bruto %d)",
-                                 (hits - frac) / 100, frac, hits)
-    end
-    text = text .. string.format("\n  recoil no alvo: %s", tostring(
-                                     ctx.dest_target_recoil_cth and ctx.dest_target_recoil_cth[d]))
-    text = text ..
-               string.format("\n  ataques permitidos (max_attacks): %s", tostring(ctx.max_attacks))
+    ---- `dest_target_score`, `dest_cth` e `dest_hit_score` NAO aparecem aqui: sao as
+    ---- colunas `score`, `CTH1` e `hits` da linha marcada com `>` na tabela abaixo.
+    ---- Esta aba vive no limite da altura da tela; duplicar dado custa linha.
+    text = text .. string.format("\n  recoil no alvo: %s | max_attacks: %s | balas/ataque: %s",
+                                 tostring(ctx.dest_target_recoil_cth and
+                                              ctx.dest_target_recoil_cth[d]),
+                                 tostring(ctx.max_attacks), tostring(ctx.burst_shots))
 
     ---- O SORTEIO. best_target nao e o de maior score: e um sorteio ponderado entre os
     ---- finalistas (>= AIDecisionThreshold do melhor). Sem estes tres numeros nao ha
@@ -1850,8 +1857,6 @@ local function PageAlvo(self, text)
         text = text .. "\n  detalhe: " .. table.concat(links, "  ")
     end
 
-    text = text ..
-               "\n<color 120 120 120>tiros/CTH1/hits variam com a DISTANCIA -- dois alvos nao sao comparaveis so pela soma</color>"
 
     ---- cartao do alvo aberto
     if self.dbg_target_focus then
