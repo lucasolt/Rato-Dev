@@ -298,4 +298,8 @@ return {
 			'CodeFileName', "Code/RATOTEL_AITelemetry.lua",
 		}),
 		}),
+	PlaceObj('ModItemCode', {
+		'name', "RebuildCUAETables",
+		'CodeFileName', "Code/RebuildCUAETables.lua",
+	}),
 }
