@@ -21,12 +21,10 @@
 --     ela mexa em cache do context, nao influencia decisao nenhuma;
 --   * ENABLED = false desliga tudo, deixando so a chamada direta ao original.
 ---------------------------------------------------------------------------------------------------
-
 ---------------------------------------------------------------------------------------------------
 -- PARAMETROS
 ---------------------------------------------------------------------------------------------------
-
-local ENABLED = true
+local ENABLED = false
 local OUT_DIR = "AppData/RatoTelemetry"
 local OUT_FILE = OUT_DIR .. "/ai_telemetry.jsonl"
 
@@ -139,7 +137,7 @@ local function SnapshotBehaviors(debug_data)
             n = tostring(d.name),
             s = d.score,
             pri = d.priority and true or nil,
-            off = d.disable and true or nil,
+            off = d.disable and true or nil
         }
     end
     return out
@@ -161,7 +159,7 @@ local function SnapshotActions(context)
             w = descr.weight,
             pct = (total > 0 and not descr.priority) and
                 MulDivRound(Max(0, descr.weight or 0), 100, total) or nil,
-            pri = descr.priority and true or nil,
+            pri = descr.priority and true or nil
         }
     end
     return out, total
@@ -266,7 +264,7 @@ end
 Unit.ratotel_orig = Unit.ratotel_orig or {
     StartAI = Unit.StartAI,
     AIChooseSignatureAction = AIChooseSignatureAction,
-    AIExecuteUnitBehavior = AIExecuteUnitBehavior,
+    AIExecuteUnitBehavior = AIExecuteUnitBehavior
 }
 local orig = Unit.ratotel_orig
 

@@ -11,7 +11,8 @@ end
 
 function OnMsg.CombatEnd()
     print(last_combat)
-    print("RATDEV last_combat table ready")
+    print("RATO DEV -- last_combat table ready")
+    print("RATO DEV -- last_combat_results table ready")
 end
 
 function OnMsg.OnAttack(unit, action, target, results, attack_args)
@@ -106,7 +107,7 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
         for _, k in ipairs(sorted_keys) do
             print("--", k, " = ", info[k])
         end
-        print("------------------------------")
+        print("------------------------------ last_results table can be inspected")
     end
 end
 
