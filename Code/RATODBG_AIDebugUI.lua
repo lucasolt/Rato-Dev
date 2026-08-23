@@ -864,6 +864,131 @@ local function PageDestinos(self, text)
     return text
 end
 
+---------------------------------------------------------------------------------------------------
+-- RESULTADO ESPERADO POR ACAO  (RATOAI_ExpectedActionScore, do Rato's AI Overhaul)
+--
+-- Responde "por que este peso" para as acoes que usam o scoring por resultado. O peso mostrado
+-- acima ja e o produto (Weight do preset x razao); aqui ficam as DUAS pontas que produziram a
+-- razao e os insumos de cada uma.
+--
+-- Le so o que o mod ja deixou no context (ctx.dbg_expected, ctx.dbg_aim_plan). Nao chama nada e
+-- nao recalcula -- se recalculasse, mostraria um numero diferente do que a IA usou, que e o
+-- unico jeito de um painel de debug mentir. Com o Overhaul desligado (ou antigo) as tabelas nao
+-- existem e o bloco some sozinho.
+--
+-- NL em vez de escape: o resto deste arquivo usa "\n" normalmente; aqui ele esta como
+-- string.char(10) porque o bloco foi gerado por ferramenta e o escape nao sobreviveu ao caminho.
+-- Funcionalmente identico.
+--
+-- Como ler:
+--   acertos = soma de CTH sobre todos os disparos que cabem no AP, /100. "padrao" e a mesma
+--             conta para o ataque basico, e e o denominador da razao.
+--   razao   = 100 significa "rende igual a so atirar". 170 = rende 70% mais. 0 = desabilita.
+--   miras   = nivel de mira de cada ataque planejado. A AutoFire tem teto 1 por natureza.
+--   MIRA    = o replan (RATOAI_AimReplan): que nivel a heuristica de distancia queria, qual o
+--             resultado escolheu, e os acertos de cada nivel avaliado. Descer de mira paga a
+--             margem; subir nao, porque a mira compra critico e a conta nao ve critico.
+---------------------------------------------------------------------------------------------------
+function RATODBG_ExpectedBlock(ctx)
+    local exp, plan = ctx.dbg_expected, ctx.dbg_aim_plan
+    if not exp and not plan then
+        return ""
+    end
+
+    local NL = string.char(10)
+    local text = NL .. NL .. "<color 255 200 0>Resultado esperado</color>"
+
+    if plan then
+        local trocou = plan.best ~= plan.heur
+        local escolha = trocou and
+                            string.format("<color 0 255 0>m%s</color>", tostring(plan.best)) or
+                            string.format("m%s (mantida)", tostring(plan.best))
+        text = text .. NL ..
+                   string.format("  MIRA heuristica m%s (%d.%02d) -> %s (%d.%02d)  margem %d%%",
+                                 tostring(plan.heur), (plan.base or 0) / 100,
+                                 (plan.base or 0) % 100, escolha, (plan.hits or 0) / 100,
+                                 (plan.hits or 0) % 100, plan.margem or 0)
+        if plan.planos then
+            text = text .. NL .. string.format("       planos: %s", plan.planos)
+        end
+    end
+
+    for id, e in sorted_pairs(exp or empty_table) do
+        local ratio = e.ratio or 0
+        local cor = ratio >= 100 and "0 255 0" or ratio > 0 and "255 200 0" or "255 80 80"
+        text = text .. NL ..
+                   string.format("  %s: <color %s>razao %d</color>  (%d.%02d vs padrao %d.%02d)",
+                                 tostring(id), cor, ratio, (e.hits or 0) / 100, (e.hits or 0) % 100,
+                                 (e.base or 0) / 100, (e.base or 0) % 100)
+        local d = e.dbg
+        if d then
+            text = text .. NL ..
+                       string.format(
+                           "       custo %d AP  balas %s  ataques %s  miras %s  recoil %s",
+                           (d.cost or 0) / 1000, tostring(d.shots), tostring(d.attacks),
+                           tostring(d.aims), tostring(d.recoil))
+            if d.cth then
+                text = text .. NL .. string.format("       CTH por nivel: %s", d.cth)
+            end
+        elseif (e.hits or 0) == 0 then
+            text = text .. NL .. "       <color 130 130 130>(nao cabe no AP: 0 ataques)</color>"
+        end
+        if e.stance ~= nil or e.base_stance ~= nil then
+            text = text .. NL ..
+                       string.format(
+                           "       <color 130 130 130>prepara arma: acao=%s padrao=%s</color>",
+                           tostring(e.stance), tostring(e.base_stance))
+        end
+    end
+
+    return text
+end
+
+---------------------------------------------------------------------------------------------------
+-- POR QUE A ACAO ESTA CINZA
+--
+-- Peso e disponibilidade sao portoes DIFERENTES e independentes, e a pagina mostrava so o peso.
+-- Dava para ver "razao 87" (peso perfeitamente bom) numa acao cinza sem nenhuma forma de saber
+-- o motivo.
+--
+-- AISignatureAction:IsAvailable roda DEPOIS do CustomScoring e do PrecalcAction, e para as
+-- acoes de tiro (AIActions.lua:753) exige tres coisas de uma vez:
+--     has_ap    -- cabe no AP. ATENCAO: este custo vem do AIGetAttackArgs, que monta `args` com
+--                  alvo e mira, entao ele JA INCLUI o AP de shooting stance -- e portanto e
+--                  MAIOR que o custo nu (action:GetAPCost(unit)) que o scoring por resultado
+--                  usa para comparar modos de tiro entre si.
+--     has_ammo  -- `results.fired` do GetActionResults. Uma rajada de 15 exige 15 no pente.
+--     can_hit   -- chance_to_hit > 0 no GetActionResults.
+--
+-- Le so o action_state que o proprio AISelectAction ja gravou. Nao recalcula nada -- recalcular
+-- aqui poderia dar outra resposta que a que a IA usou, que e o unico jeito de um painel mentir.
+---------------------------------------------------------------------------------------------------
+local function IndisponivelPorque(ctx, action)
+    local st = action and ctx.action_states and ctx.action_states[action]
+    if not st then
+        return ""
+    end
+    local faltas = {}
+    if st.has_ap == false then
+        faltas[#faltas + 1] = "AP"
+    end
+    if st.has_ammo == false then
+        faltas[#faltas + 1] = "municao"
+    end
+    if st.can_hit == false then
+        faltas[#faltas + 1] = "CTH zero"
+    end
+    if st.args and not IsValidTarget(st.args.target) then
+        faltas[#faltas + 1] = "alvo invalido"
+    end
+    if #faltas == 0 then
+        ---- o PrecalcAction so avalia municao e CTH quando has_ap passa; entao "nenhuma falta"
+        ---- numa acao cinza normalmente quer dizer que ela nem chegou a ser testada.
+        return (st.has_ap == nil) and "  <color 130 130 130>[nao avaliada]</color>" or ""
+    end
+    return string.format("  <color 255 80 80>[falta: %s]</color>", table.concat(faltas, ", "))
+end
+
 local function PageAcoes(self, text)
     local ctx = self.ai_context
 
@@ -903,9 +1028,12 @@ local function PageAcoes(self, text)
                        link("UnitForceAction", i, string.format("%s: %s", action_name, val), 255,
                             255, 0)
         else
-            text = text .. string.format("\n  <color 130 130 130>%s: %s</color>", action_name, val)
+            text = text .. string.format("\n  <color 130 130 130>%s: %s</color>%s", action_name, val,
+                                         IndisponivelPorque(ctx, descr.action))
         end
     end
+
+    text = text .. RATODBG_ExpectedBlock(ctx)
 
     return text
 end

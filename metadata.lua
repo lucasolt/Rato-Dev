@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 571,
+	'version', 572,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -28,8 +28,7 @@ return PlaceObj('ModDef', {
 		"Code/Rebuild.lua",
 	},
 	'default_options', {},
-	'has_data', true,
-	'saved', 1787439338,
-	'code_hash', 4858650104830275607,
+	'saved', 1787451535,
+	'code_hash', 5429199584624916620,
 	'affected_resources', {},
 })
