@@ -926,12 +926,14 @@ function RATODBG_ExpectedBlock(ctx)
                        string.format(
                            "       custo %d AP  balas %s  ataques %s  miras %s  recoil %s",
                            (d.cost or 0) / 1000, tostring(d.shots), tostring(d.attacks),
-                           tostring(d.aims), tostring(d.recoil))
+                           tostring(d.aims), d.recoil and tostring(d.recoil) or "-")
             if d.cth then
                 text = text .. NL .. string.format("       CTH por nivel: %s", d.cth)
             end
         elseif (e.hits or 0) == 0 then
-            text = text .. NL .. "       <color 130 130 130>(nao cabe no AP: 0 ataques)</color>"
+            text = text .. NL ..
+                       string.format("       <color 130 130 130>(%s)</color>",
+                                     tostring(e.motivo or "0 acertos esperados"))
         end
         if e.stance ~= nil or e.base_stance ~= nil then
             text = text .. NL ..
