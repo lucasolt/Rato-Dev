@@ -1087,6 +1087,20 @@ function RATODBG_ExpectedBlock(ctx)
                                  tostring(id), cor, ratio, (e.hits or 0) / 100, (e.hits or 0) % 100,
                                  (e.base or 0) / 100, (e.base or 0) % 100)
         local d = e.dbg
+
+        ---- DEBUG (D4): CONTRA QUEM. O estimador nao escolhe alvo, ele recebe o
+        ---- `dest_target[dest]`; sem esta linha "0 acertos" nao se distingue de "0 acertos
+        ---- contra o alvo errado". O `alvo` vem do dbg do RATOAI_ExpectedFor ou, nas
+        ---- CustomScoring que montam a linha a mao (MGSetup, PrepareWeapon), do proprio `e`.
+        local alvo = (d and d.alvo) or e.alvo
+        local dist = (d and d.dist) or e.dist
+        if alvo then
+            text = text .. NL ..
+                       string.format("       <color 180 200 255>alvo: %s</color>%s", tostring(alvo),
+                                     dist and string.format("  (%d tiles)",
+                                                            dist / const.SlabSizeX) or "")
+        end
+
         if d then
             text = text .. NL ..
                        string.format(
@@ -1182,11 +1196,27 @@ local function PageAcoes(self, text)
         local val
         if descr.priority then
             val = "PRIORITY"
+        elseif descr.weight == false then
+            ---- DEBUG (D5): `false` cru na tela nao dizia nada. Sao dois estados diferentes e
+            ---- agora eles se chamam pelo nome -- ver o marcador em SOURCE_AISelectAction.lua.
+            val = descr.disabled_by and "desabilitada" or "indisponivel"
         elseif total > 0 then
             val = string.format("%d  (%d%%)", descr.weight or 0,
                                 MulDivRound(Max(0, descr.weight or 0), 100, total))
         else
             val = tostring(descr.weight)
+        end
+
+        ---- DEBUG (D5): desabilitada NAO passou pelo PrecalcAction, entao o action_state esta
+        ---- vazio e o IndisponivelPorque so poderia dizer "[nao avaliada]" -- que e verdade e e
+        ---- inutil. Quem sabe o motivo e quem desabilitou.
+        local motivo
+        if descr.disabled_by == "CustomScoring" then
+            motivo = "  <color 255 140 60>[desabilitada pela CustomScoring]</color>"
+        elseif descr.disabled_by then
+            motivo = "  <color 255 140 60>[desabilitada pelo bias]</color>"
+        else
+            motivo = IndisponivelPorque(ctx, descr.action)
         end
 
         if self.forced_action == i then
@@ -1196,8 +1226,8 @@ local function PageAcoes(self, text)
                        link("UnitForceAction", i, string.format("%s: %s", action_name, val), 255,
                             255, 0)
         else
-            text = text .. string.format("\n  <color 130 130 130>%s: %s</color>%s", action_name, val,
-                                         IndisponivelPorque(ctx, descr.action))
+            text = text .. string.format("\n  <color 130 130 130>%s: %s</color>%s", action_name,
+                                         val, motivo)
         end
     end
 
@@ -1702,22 +1732,101 @@ function IModeAIDebug:OnMousePos(pt)
     end
 end
 
-RATODBG_Orig_Done = rawget(_G, "RATODBG_Orig_Done") or IModeAIDebug.Done
+---- O original guardado NA CLASSE, e nao numa global com guarda de `rawget`.
+---- Medido no processo vivo: `rawget(_G, "RATODBG_Orig_Done")` devolve nil mesmo com a global
+---- definida e viva -- neste engine os globais moram atras do `__index` do `_G` (mesmo motivo do
+---- BUGFIX B34 no mod de IA). Ou seja, a guarda nunca guardou: a cada reload o `or` capturava o
+---- `Done` JA PATCHEADO da carga anterior e empilhava mais um wrapper. Nao quebrava -- so ficava
+---- N chamadas de profundidade, uma por reload, em silencio.
+---- A tabela da classe e tabela comum, entao aqui o `or` significa o que diz.
+IModeAIDebug.RATODBG_Orig_Done = IModeAIDebug.RATODBG_Orig_Done or IModeAIDebug.Done
 function IModeAIDebug:Done(...)
     self:ClearInfluenceFx()
-    return RATODBG_Orig_Done(self, ...)
+    return IModeAIDebug.RATODBG_Orig_Done(self, ...)
 end
 
----- Process refaz o think e troca o ai_context. As linhas no ar apontam para numeros do
----- context antigo, e so seriam redesenhadas quando o mouse trocasse de tile -- ate la,
----- dado velho na tela sem nada indicando isso. Redesenha na hora, com o mouse parado.
-RATODBG_Orig_Process = rawget(_G, "RATODBG_Orig_Process") or IModeAIDebug.Process
-function IModeAIDebug:Process(...)
-    local res = RATODBG_Orig_Process(self, ...)
+---------------------------------------------------------------------------------------------------
+-- DEBUG (D3): O PAINEL PONTUAVA AS ACOES NUM MOMENTO DO PIPELINE QUE O TURNO REAL NAO TEM
+--
+-- COPIA de IModeAIDebug:Process (Lua/UI/IModeAIDebug.lua:117), com a ORDEM das duas ultimas
+-- chamadas trocada. O vanilla faz:
+--
+--     context.behavior:Think(...)
+--     AIChooseSignatureAction(context)                       <- CustomScoring roda AQUI
+--     AIPrecalcDamageScore(context, {ai_destination}, ...)   <- alvo do destino so DEPOIS
+--
+-- e o turno real (AIPlayAttacks, CombatAI.lua:216-232) faz o contrario: precalc do destino
+-- unico PRIMEIRO, escolha da signature DEPOIS.
+--
+-- POR QUE ISSO IMPORTA, e nao e detalhe: toda CustomScoring le `context.dest_target[upos]`
+-- (via GetDestArgs), e o precalc de destino unico REESCREVE esse alvo. Medido no processo vivo
+-- com o LegionGunner:412 -- a MGSetup_CustomScoring pontuou contra um alvo a 20 tiles com CTH 0
+-- (razao 250, "rende 0.00") enquanto a pagina Alvo, redesenhada depois do precalc, mostrava o
+-- alvo real a 3 tiles com CTH 47 e 2.1 acertos. As duas paginas do MESMO painel falavam de
+-- momentos diferentes, e a 3 tiles aquela acao teria sido DESABILITADA pelo portao de close
+-- range. Era um bug fantasma inteiro, so do observador.
+--
+-- Alem da ordem, replica dois detalhes do AIPlayAttacks que o vanilla do painel nao tem:
+--   * `dest_ap[dest] = dest_ap[dest] or unit.ActionPoints` -- no-op quando o destino ja foi
+--     orcado (o caso normal), mas e a linha que da orcamento ao destino que nao foi;
+--   * `preferred_target` -- no turno real o alvo que o sweep escolheu para aquele destino tem
+--     PREFERENCIA no recalculo (SOURCE_AIPrecalcDamageScore.lua:520 da `break` nele). Passando
+--     nil, como o vanilla do painel faz, o alvo e re-escolhido do zero e o painel pode mostrar
+--     um alvo que o turno nao usaria.
+--
+-- LIMITE CONHECIDO, fica registrado: o AIPlayAttacks remove o `FreeMove` antes de tudo isso
+-- (CombatAI.lua:203) e aqui nao da para remover -- seria mexer no estado da unidade fora do
+-- turno dela. Para destinos DENTRO da franquia de free move, o `leftover_free` do BUGFIX (B19)
+-- desconta aqui e nao la, e a contagem de ataques do painel sai por um tiro de diferenca.
+--
+-- O redesenho das linhas de influencia continua aqui: Process troca o ai_context, e as linhas
+-- no ar apontariam para numeros do context antigo ate o mouse trocar de tile.
+---------------------------------------------------------------------------------------------------
+function IModeAIDebug:Process(unit)
+    if not CurrentThread() then
+        CreateRealTimeThread(self.Process, self, unit)
+        return
+    end
+    self.selected_unit = IsValidTarget(unit) and unit
+    if IsValid(unit) and unit:IsAware() then
+        if unit:HasStatusEffect("ManningEmplacement") and not g_Combat:GetEmplacementAssignment(unit) then
+            AIPlayCombatAction("MGLeave", unit, 0)
+        end
+
+        unit:SetEnumFlags(const.efVisible)
+
+        self.think_data = {optimal_scores = {}, reachable_scores = {}}
+
+        local t = GetPreciseTicks()
+        g_AIDestEnemyLOSCache = {}
+        g_AIDestIndoorsCache = {}
+        unit.ai_context = nil
+        if unit:StartAI(self.think_data, self.forced_behavior) then
+            self.time_start_ai = GetPreciseTicks() - t
+            local context = unit.ai_context
+            self.ai_context = context
+
+            context.behavior:Think(unit, self.think_data)
+
+            local dest = context.ai_destination
+            if dest then
+                context.dbg_enemy_damage_score = {}
+                context.dest_ap[dest] = context.dest_ap[dest] or unit.ActionPoints
+                AIPrecalcDamageScore(context, {dest},
+                                     context.target_locked or
+                                         (context.dest_target or empty_table)[dest],
+                                     context.dbg_enemy_damage_score)
+            end
+
+            AIChooseSignatureAction(context) -- for debug purposes
+        end
+    end
+    self:ClearVoxelFx()
+    self:Update()
+
     if self.dbg_influence then
         self:DrawInfluenceLines()
     end
-    return res
 end
 
 local function PageCamadas(self, text)

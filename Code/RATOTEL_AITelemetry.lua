@@ -173,7 +173,11 @@ local function SnapshotActions(context)
             w = descr.weight,
             pct = (total > 0 and not descr.priority) and
                 MulDivRound(Max(0, descr.weight or 0), 100, total) or nil,
-            pri = descr.priority and true or nil
+            pri = descr.priority and true or nil,
+            ---- DEBUG (D5): `w = false` cobre DOIS estados -- desabilitada (nem chegou ao
+            ---- PrecalcAction) e indisponivel (IsAvailable reprovou). Sem este campo o log
+            ---- nao separa "a regra vetou" de "faltou AP/municao/CTH".
+            off = descr.disabled_by or nil
         }
     end
     return out, total
