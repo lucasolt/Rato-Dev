@@ -1156,6 +1156,52 @@ function RATODBG_ExpectedBlock(ctx)
                    string.format("  %s: <color %s>%s</color>%s", tostring(id),
                                  RatioColorTag(ratio), rotulo, par)
 
+        ---- DEBUG (D7): o A/B da mudanca de modelo. `razao` acima ja e a NOVA (turno contra
+        ---- turno); esta linha abre o numerador e mostra a ANTIGA (N ataques da candidata) ao
+        ---- lado, que e o numero contra o qual os `Weight` dos presets foram calibrados.
+        ---- Some sozinha quando a recalibragem terminar e o campo deixar de ser gravado.
+        local tn = e.turno
+        if tn then
+            ---- AP em unidade de tela. O engine guarda AP x const.Scale.AP (1000), e `/` neste
+            ---- Lua e divisao INTEIRA -- 8380/1000 daria "8" e comeria justamente a fracao que
+            ---- decide se mais um disparo cabe. Parte inteira e centesimos, separados.
+            local escala = const.Scale.AP
+            local function ap(v)
+                v = v or 0
+                return string.format("%d.%02d", v / escala, (v % escala) * 100 / escala)
+            end
+            ---- o denominador, escrito por extenso -- e contra ELE que a razao e formada
+            text = text .. NL ..
+                       string.format(
+                           "       <color 150 150 150>denominador: %d.%02d  (%s ataques do padrao com %s AP)</color>",
+                           (e.base or 0) / 100, (e.base or 0) % 100, tostring(tn.m or "?"),
+                           ap(tn.ap_total))
+
+            if tn.sustentado then
+                text = text .. NL ..
+                           string.format(
+                               "       <color 150 200 150>sustentada: %d.%02d  (%s ataques dela, sustenta o modo o turno todo)</color>",
+                               (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100,
+                               tostring(tn.n or "?"))
+            else
+                local total = (tn.primeiro or 0) + (tn.resto or 0)
+                text = text .. NL ..
+                           string.format(
+                               "       <color 200 180 140>turno: %d.%02d (1 dela) + %d.%02d (%s do padrao com %s AP) = %d.%02d</color>",
+                               (tn.primeiro or 0) / 100, (tn.primeiro or 0) % 100,
+                               (tn.resto or 0) / 100, (tn.resto or 0) % 100,
+                               tostring(tn.k or "?"), ap(tn.ap_left), total / 100,
+                               total % 100)
+                if e.ratio_antigo then
+                    text = text .. NL ..
+                               string.format(
+                                   "       <color 130 130 130>modelo antigo: razao %d  (%d.%02d = %s ataques dela, turno que nao acontece)</color>",
+                                   e.ratio_antigo, (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100,
+                                   tostring(tn.n or "?"))
+                end
+            end
+        end
+
         local d = e.dbg
 
         ---- DEBUG (D4): CONTRA QUEM. O estimador nao escolhe alvo, ele recebe o
