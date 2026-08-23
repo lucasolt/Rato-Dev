@@ -19,12 +19,26 @@
 --     intacto;
 --   * a decomposicao por policy roda DEPOIS que a unidade ja agiu, entao mesmo que
 --     ela mexa em cache do context, nao influencia decisao nenhuma;
---   * ENABLED = false desliga tudo, deixando so a chamada direta ao original.
+--   * const.RATOAI.Telemetry = false desliga tudo, deixando so a chamada direta ao
+--     original; sem ela, segue o RATOAI_Debug.
 ---------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------
 -- PARAMETROS
 ---------------------------------------------------------------------------------------------------
-local ENABLED = false
+---- LIGADO PELO MESMO INTERRUPTOR DO RESTO DO DEBUG.
+---- Era um `false` chumbado, o que fazia esta ferramenta -- que existe exatamente para nao
+---- precisar forcar comportamento pela UI -- ficar invisivel. `const.RATOAI.Telemetry` sobrepoe
+---- explicitamente (true/false); sem ela, segue o RATOAI_Debug.
+---- Funcao e nao valor: o RATOAI_Debug e recomputado no CombatStart, DEPOIS deste load. Um
+---- booleano capturado aqui congelaria o valor errado. Nao ha custo de laco quente -- estes
+---- wrappers rodam uma vez por unidade por turno.
+local function ENABLED()
+    local v = const.RATOAI and const.RATOAI.Telemetry
+    if v ~= nil then
+        return v
+    end
+    return RATOAI_Debug and true or false
+end
 local OUT_DIR = "AppData/RatoTelemetry"
 local OUT_FILE = OUT_DIR .. "/ai_telemetry.jsonl"
 
@@ -242,6 +256,17 @@ local function CaptureAfter(unit, rec, status)
         end
     end
 
+    ---- RESULTADO ESPERADO (do Rato's AI Overhaul).
+    ---- Copia do que o proprio turno gravou no context -- nao recalcula nada. Sem isto o JSONL
+    ---- mostra o PESO final de cada acao sem mostrar a razao que o produziu, que e justamente a
+    ---- parte que se quer auditar sem ter de forcar a acao pela UI.
+    if ctx then
+        rec.expected = ctx.dbg_expected
+        rec.aim_plan = ctx.dbg_aim_plan
+        rec.atk = ctx.default_attack and ctx.default_attack.id
+        rec.degraded = ctx.__ratoai_degraded and true or nil
+    end
+
     ---- decomposicao rodada AQUI de proposito: a unidade ja agiu, entao qualquer
     ---- efeito colateral em cache do context nao influencia decisao nenhuma
     if RECORD_BREAKDOWN and ctx then
@@ -269,7 +294,7 @@ Unit.ratotel_orig = Unit.ratotel_orig or {
 local orig = Unit.ratotel_orig
 
 function Unit:StartAI(debug_data, forced_behavior)
-    if not ENABLED then
+    if not ENABLED() then
         return orig.StartAI(self, debug_data, forced_behavior)
     end
     ---- passamos um debug_data proprio quando o jogo nao passa nenhum: e a unica
@@ -284,7 +309,7 @@ end
 
 function AIChooseSignatureAction(context)
     local action = orig.AIChooseSignatureAction(context)
-    if ENABLED then
+    if ENABLED() then
         pcall(function()
             local rec = pending[context.unit]
             if rec then
@@ -299,7 +324,7 @@ function AIChooseSignatureAction(context)
 end
 
 function AIExecuteUnitBehavior(unit, force_or_skip_action)
-    if not ENABLED then
+    if not ENABLED() then
         return orig.AIExecuteUnitBehavior(unit, force_or_skip_action)
     end
 
@@ -326,7 +351,7 @@ end
 ---------------------------------------------------------------------------------------------------
 
 function OnMsg.CombatStart()
-    if not ENABLED then
+    if not ENABLED() then
         return
     end
     pcall(function()
@@ -341,7 +366,7 @@ function OnMsg.CombatStart()
 end
 
 function OnMsg.CombatEnd()
-    if not ENABLED then
+    if not ENABLED() then
         return
     end
     pcall(function()

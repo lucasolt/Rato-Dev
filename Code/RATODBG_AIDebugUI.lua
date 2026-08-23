@@ -822,6 +822,170 @@ local function PageUnidade(self, text)
     return text
 end
 
+
+---------------------------------------------------------------------------------------------------
+-- FORCAR O DESTINO (E A POSTURA) DO TURNO
+--
+-- Para que serve: montar a situacao especifica em vez de esperar ela acontecer. Colocar a unidade
+-- num tile onde sobra EXATAMENTE o AP que se quer testar -- por exemplo o suficiente para stance e
+-- nao para o tiro, que e o cenario do PrepareWeapon.
+--
+-- SO ENTRE OS CANDIDATOS DA PROPRIA IA, e isso nao e limitacao preguicosa. O AIBehavior:BeginMovement
+-- (AIBehaviors.lua:143) le `context.dest_combat_path[dest]` e `context.combat_paths[...]` para
+-- montar o caminho, e o `context.dest_ap[dest]` e o orcamento que todo o resto assume. Um tile
+-- fora de `context.destinations` nao tem nada disso: o movimento falharia ou -- pior -- rodaria
+-- com AP inventado, e o turno "forcado" voltaria a ser ficcao. Que e exatamente o defeito que o
+-- UnitExecuteTurn fiel acabou de consertar.
+--
+-- A POSTURA vem de graca: `context.destinations` guarda pos+postura empacotadas juntas, entao o
+-- mesmo tile costuma aparecer mais de uma vez, uma por postura viavel. Cada uma vira um link.
+--
+-- Como usar: passe o mouse no tile, va na pagina Destinos, clique na postura. Depois Execute Turn.
+---------------------------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------------------------
+-- PENDENTE (2026-08-23): O DESTINO FORCADO NEM SEMPRE E OBEDECIDO.
+--
+-- Relatado em campo: fixa o tile, escolhe a postura, Execute Turn -- e a unidade vai para outro
+-- lugar. Registrado com o que ja foi MEDIDO, para a proxima investigacao nao repetir trabalho.
+--
+-- DESCARTADO, com medicao no processo vivo: "o contexto do painel e uma copia". NAO e.
+--     dlg.ai_context == unit.ai_context  ->  true
+--     endereco dlg = table: 000001D6C2737C88 = endereco unit
+--     (escrito um campo pelo lado do painel, lido pelo lado da unidade: chegou)
+-- Em Lua tabela e referencia; `self.ai_context = context` (IModeAIDebug.lua:145) so cria outro
+-- nome para a mesma tabela. Escrever `context.ai_destination` chega na unidade.
+--
+-- HIPOTESE PRINCIPAL -- nao e copia, e SUBSTITUICAO. O Process (IModeAIDebug.lua:141-147) faz:
+--     unit.ai_context = nil          -- descarta o contexto antigo
+--     unit:StartAI(...)              -- cria um NOVO
+--     self.ai_context = <novo>
+--     context.behavior:Think(unit, ...)   -- e o Think RECALCULA ai_destination
+-- Ou seja, qualquer Process entre a escolha e o Execute Turn (a) joga fora a tabela em que se
+-- escreveu e (b) recomputa o destino por conta propria. O `ratodbg_forced_dest` vive no PAINEL e
+-- sobrevive a isso -- mas o RATODBG_ForcedDest so o aplica se ele ainda constar de
+-- `context.destinations`, e a lista nova pode nao te-lo. Nesse caso ele desiste, de proposito,
+-- porem em silencio para quem nao esta lendo o painel.
+--     Como checar: apos escolher, confirmar se o painel marca `(sumiu do think atual)` em
+--     vermelho. Se marcar, e isto, e a decisao passa a ser de produto: reprojetar o destino
+--     forcado para o tile+postura mais proximo da nova lista, ou bloquear o Process enquanto
+--     houver destino forcado.
+--
+-- HIPOTESE SECUNDARIA: TakeStance zera o destino. AIBehaviors.lua:130 faz
+-- `context.ai_destination = false` quando o AIPlayChangeStance falha no ramo de movimento. Se a
+-- postura forcada nao for a que o `dest_combat_path` previu para aquele caminho, o destino
+-- evapora em silencio. Como checar: logar `context.ai_destination` antes e depois do TakeStance.
+--
+-- HIPOTESE TERCIARIA: o link nao chega no handler. `link("ForceDest", i, ...)` depende da
+-- convencao <h Nome ...> mapear para IModeAIDebug:ForceDest. Como checar: printf no ForceDest.
+---------------------------------------------------------------------------------------------------
+
+---- opcoes do ultimo desenho, indexadas por numero -- mesmo padrao do UnitForceAction do jogo.
+---- Passar o valor empacotado direto no link seria fragil: sao inteiros grandes e o parser de
+---- <h ...> os trata como texto.
+local function OpcoesNoVoxel(self)
+    local ctx = self.ai_context
+    if not ctx or not self.ratodbg_pinned_voxel then
+        return
+    end
+    local vx, vy = point_unpack(self.ratodbg_pinned_voxel)
+    local out = {}
+    for _, dest in ipairs(ctx.destinations or empty_table) do
+        local x, y, z, si = stance_pos_unpack(dest)
+        ---- compara so x,y: o z do voxel sob o cursor e o do slab, e o do destino pode vir da
+        ---- altura do terreno. Em mapa de varios andares isto pode listar os dois -- e o `z` no
+        ---- rotulo desempata visualmente.
+        if x == vx and y == vy then
+            out[#out + 1] = {
+                dest = dest,
+                stance = StancesList[si] or ("?" .. tostring(si)),
+                z = z,
+                ap = ctx.dest_ap and ctx.dest_ap[dest],
+            }
+        end
+    end
+    self.ratodbg_force_opts = out
+    return out
+end
+
+function IModeAIDebug:ForceDest(index)
+    local o = self.ratodbg_force_opts and self.ratodbg_force_opts[tonumber(index)]
+    if o then
+        self.ratodbg_forced_dest = o.dest
+    end
+    self:Update()
+end
+
+function IModeAIDebug:ClearForceDest()
+    self.ratodbg_forced_dest = nil
+    self.ratodbg_pinned_voxel = nil
+    self:Update()
+end
+
+---- Devolve o destino forcado se ele AINDA existe na lista de candidatos. O Process refaz o think
+---- e recalcula `context.destinations`; um destino guardado de antes pode ter sumido, e usa-lo
+---- levaria de volta ao turno ficticio. Valida na hora de usar, nao na hora de escolher.
+function RATODBG_ForcedDest(self, context)
+    local dest = self.ratodbg_forced_dest
+    if not dest or not context then
+        return
+    end
+    for _, d in ipairs(context.destinations or empty_table) do
+        if d == dest then
+            return dest
+        end
+    end
+end
+
+function RATODBG_ForceDestBlock(self)
+    local NL = string.char(10)
+    local ctx = self.ai_context
+    local text = NL .. NL .. "<color 255 200 0>Forcar destino</color>"
+
+    local atual = self.ratodbg_forced_dest
+    if atual then
+        local x, y, z, si = stance_pos_unpack(atual)
+        local valido = RATODBG_ForcedDest(self, ctx)
+        text = text .. NL ..
+                   string.format("  atual: %d,%d %s  ap=%s %s   %s", x, y,
+                                 tostring(StancesList[si]),
+                                 tostring(ctx and ctx.dest_ap and ctx.dest_ap[atual]),
+                                 valido and "" or "<color 255 80 80>(sumiu do think atual)</color>",
+                                 link("ClearForceDest", nil, "[limpar]", 255, 150, 150))
+    else
+        text = text .. NL .. "  <color 130 130 130>(nenhum -- a IA escolhe)</color>"
+    end
+
+    if not self.ratodbg_pinned_voxel then
+        text = text .. NL ..
+                   "  <color 130 130 130>clique com o BOTAO ESQUERDO num tile do mapa para" ..
+                   " escolher a postura</color>"
+        return text
+    end
+
+    local px, py = point_unpack(self.ratodbg_pinned_voxel)
+    local opts = OpcoesNoVoxel(self)
+
+    if not opts or #opts == 0 then
+        text = text .. NL ..
+                   string.format("  tile %d,%d: <color 255 80 80>nao esta entre os destinos que a" ..
+                                 " IA calculou</color>   %s", px, py,
+                                 link("ClearForceDest", nil, "[limpar]", 255, 150, 150))
+        return text
+    end
+
+    text = text .. NL .. string.format("  tile fixado %d,%d:", px, py)
+    for i, o in ipairs(opts) do
+        local rotulo = string.format("%s (ap %s, z %s)", o.stance, tostring(o.ap), tostring(o.z))
+        if o.dest == atual then
+            text = text .. NL .. string.format("    <color 0 255 0>%s [forcado]</color>", rotulo)
+        else
+            text = text .. NL .. "    " .. link("ForceDest", i, rotulo, 255, 255, 0)
+        end
+    end
+    return text
+end
+
 local function PageDestinos(self, text)
     local ctx = self.ai_context
     local td = self.think_data or empty_table
@@ -861,11 +1025,13 @@ local function PageDestinos(self, text)
         end
     end
 
+    text = text .. RATODBG_ForceDestBlock(self)
+
     return text
 end
 
 ---------------------------------------------------------------------------------------------------
--- RESULTADO ESPERADO POR ACAO  (RATOAI_ExpectedActionScore, do Rato's AI Overhaul)
+-- RESULTADO ESPERADO POR ACAO  (do Rato's AI Overhaul)
 --
 -- Responde "por que este peso" para as acoes que usam o scoring por resultado. O peso mostrado
 -- acima ja e o produto (Weight do preset x razao); aqui ficam as DUAS pontas que produziram a
@@ -2119,4 +2285,153 @@ function IModeAIDebug:Update()
     end
 
     ctrl:SetText(text)
+end
+
+---------------------------------------------------------------------------------------------------
+-- EXECUTAR TURNO FIEL AO CONTROLADOR REAL
+--
+-- O UnitExecuteTurn do jogo (IModeAIDebug.lua:296) remonta a execucao a mao e diverge do que o
+-- AIExecutionController de fato faz (CombatCamera.lua:1025-1199 + AIExecuteUnitBehavior). Tres
+-- diferencas, todas capazes de produzir um turno que nao acontece assim em jogo:
+--
+--   1. RESULTADO DO MOVIMENTO IGNORADO. O controlador real faz
+--          result = behavior:BeginMovement(unit, trackMove)
+--          if result ~= "continue" then ... break
+--      ou seja, movimento interrompido (mina, overwatch, "restart") PARA a execucao. O painel
+--      descartava o retorno e seguia atacando a partir de um estado que o jogo teria abortado.
+--
+--   2. EXECUCAO REMONTADA. O painel chamava `behavior:Play(unit)` e depois `AIPlayAttacks` na mao.
+--      O caminho real e AIExecuteUnitBehavior(unit), que faz o Play, TRATA O STATUS que ele
+--      devolve (behaviors podem pedir "restart"/parada) e so entao vai para os ataques. Pular a
+--      funcao e pular esse tratamento.
+--
+--   3. ACAO FORCADA POR FORA. O engine ja tem canal proprio -- `context.forced_signature_action`,
+--      que o AIExecuteUnitBehavior repassa como `dbg_action`. O painel injetava direto no
+--      AIPlayAttacks, o que obriga a pular o item 2.
+--
+-- Esta versao chama a MESMA funcao que o jogo chama, com a acao forcada pelo canal oficial. O que
+-- ela NAO reproduz continua sendo: a camera, o agendamento entre varias unidades, e o
+-- `trackMove` (que so afeta camera). Nada disso muda decisao.
+--
+-- NAO CONSERTA (e vale saber, porque foi o sintoma que motivou isto): o TakeStance so adota a
+-- PrefStance se `uiAP > custo_da_postura + custo_do_ataque` (AIBehaviors.lua:92). Com AP curto a
+-- unidade legitimamente NAO agacha -- em jogo tambem. Se o sintoma persistir com esta versao, e
+-- regra do jogo, nao artefato do painel.
+---------------------------------------------------------------------------------------------------
+const.RATOAI = const.RATOAI or {}
+
+function IModeAIDebug:UnitExecuteTurn()
+    if not self.selected_unit then
+        return
+    end
+    assert(self.ai_context and self.ai_context.unit == self.selected_unit)
+
+    self.running_turn = true
+    CreateGameTimeThread(function()
+        local unit = self.selected_unit
+        local context = self.ai_context
+
+        ---- canal oficial: e assim que o proprio jogo passa uma acao escolhida a mao
+        local descr = self.forced_action and (context.choose_actions or empty_table)[self.forced_action]
+        local anterior = context.forced_signature_action
+        context.forced_signature_action = descr and descr.action or nil
+
+        ---- pcall em tudo: este e um modo de DEBUG, e um erro aqui nao pode deixar a sessao com
+        ---- running_turn preso em true (o painel congelaria sem explicacao).
+        ---- destino forcado pelo painel, validado contra o think ATUAL (ver RATODBG_ForcedDest)
+        local forcado = RATODBG_ForcedDest(self, context)
+        if forcado then
+            context.ai_destination = forcado
+        end
+
+        local ok, err = pcall(function()
+            if context.behavior then
+                context.behavior:TakeStance(unit)
+            end
+
+            local result = "continue"
+            if context.ai_destination and IsValid(unit) and not unit:IsDead() and context.behavior then
+                result = context.behavior:BeginMovement(unit)
+                WaitCombatActionsEnd(unit)
+            end
+
+            self.ratodbg_last_move_result = result
+
+            if result ~= "continue" then
+                ---- exatamente o que o controlador real faz: movimento interrompido encerra a
+                ---- execucao desta unidade. Antes daqui, o painel atacava assim mesmo.
+                return
+            end
+
+            if IsValid(unit) and not unit:IsDead() then
+                self.ratodbg_last_status = AIExecuteUnitBehavior(unit)
+            end
+        end)
+
+        context.forced_signature_action = anterior
+        if not ok then
+            self.ratodbg_last_status = "ERRO: " .. tostring(err)
+        end
+
+        self.running_turn = false
+        self:Process(self.selected_unit)
+    end)
+    self:Update()
+end
+
+---------------------------------------------------------------------------------------------------
+-- CLIQUE ESQUERDO NO VAZIO NAO PODE DESMONTAR A SESSAO DE DEBUG
+--
+-- O OnMouseButtonDown do jogo (IModeAIDebug.lua:93) faz:
+--     if button == "L" then
+--         if obj ~= selu then            -- obj = nil quando o clique nao pega unidade
+--             self.forced_behavior = false
+--             self.forced_action = false
+--             CreateGameTimeThread(self.Process, self, obj)
+--
+-- `obj` e nil ao clicar em chao vazio ou sobre o proprio painel -- e nil ~= selu, entao ele
+-- DESSELECIONA a unidade, zera o behavior/acao forcados e refaz o think. Na pratica: qualquer
+-- clique que nao acerte um boneco joga fora a situacao que se estava montando.
+--
+-- Isso e fatal para o fluxo de forcar destino: os links vivem no painel, e para clicar neles o
+-- mouse sai do tile e passa por chao vazio.
+--
+-- CONSERTO: so reprocessa quando o clique pega OUTRA unidade. Clique no vazio vira no-op (com
+-- "break", que e o mesmo que o vanilla ja devolvia naquele ramo, entao nada mais muda de
+-- comportamento). Trocar unidade continua funcionando; o botao direito -- que teleporta a unidade
+-- para o tile do cursor -- fica intacto.
+--
+-- ORIGINAL GUARDADO NA CLASSE, e nao numa global. O resto deste arquivo usa
+-- `RATODBG_Orig_X = rawget(_G, "RATODBG_Orig_X") or IModeAIDebug.X`, com a intencao documentada
+-- de capturar so uma vez. Essa guarda NAO funciona: `rawget` no _G deste engine nunca acha global
+-- de mod (ver o cabecalho de CONSTANTS_AI_source.lua no Rato's AI Overhaul), entao a cada recarga
+-- ela recaptura -- e o que era para ser o original passa a ser o wrapper da carga anterior,
+-- empilhando uma chamada a mais por recarga. Tabela na classe e lookup de verdade e nao tem esse
+-- problema.
+---------------------------------------------------------------------------------------------------
+
+IModeAIDebug.ratodbg_orig = IModeAIDebug.ratodbg_orig or {}
+IModeAIDebug.ratodbg_orig.OnMouseButtonDown = IModeAIDebug.ratodbg_orig.OnMouseButtonDown or
+                                                  IModeAIDebug.OnMouseButtonDown
+
+function IModeAIDebug:OnMouseButtonDown(pt, button)
+    if button == "L" then
+        local obj = SelectionMouseObj()
+        obj = IsKindOf(obj, "Unit") and obj or nil
+        if not obj or obj == self.selected_unit then
+            ---- FIXA O TILE. Antes isto era so no-op, e a lista de posturas do painel era montada
+            ---- a partir do `selected_voxel` (o tile sob o cursor). Isso nao funciona: o painel so
+            ---- remonta a lista quando RENDERIZA, e para clicar num link o mouse precisa sair do
+            ---- tile -- entao o indice do link apontava para a lista de outro momento, e o destino
+            ---- escolhido nao era o que se tinha clicado.
+            ---- Com o tile FIXADO no clique, a lista para de depender de onde o mouse esta.
+            local pos = GetCursorPassSlab()
+            if pos then
+                self.ratodbg_pinned_voxel = point_pack(pos)
+                self:Update()
+            end
+            return "break"
+        end
+    end
+    return IModeAIDebug.ratodbg_orig.OnMouseButtonDown(self, pt, button)
 end
