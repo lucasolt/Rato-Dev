@@ -57,6 +57,31 @@ local NEG_RAMP = {
 ---- cortes do gradiente, em % da faixa [min, max]
 local RAMP_STOPS = {20, 40, 60, 80}
 
+---------------------------------------------------------------------------------------------------
+---- ESCALA DA RAZAO -- PIVO EM 100, NAO EM ZERO
+----
+---- A razao de resultado esperado empata em 100 ("a acao rende o mesmo que so atirar"), nao em
+---- zero. A escala divergente das camadas nao serve aqui: la o ponto neutro e o zero, e usa-la
+---- pintaria 99 e 1 da mesma cor -- que foi exatamente o defeito da versao anterior
+---- (`ratio >= 100 and verde or ratio > 0 and amarelo or vermelho`: so o zero exato era
+---- vermelho, e todo o intervalo 1..99 saia amarelo, indistinguivel).
+----
+---- Tres ancoras, INTERPOLADAS de verdade (e uma linha de texto, nao um mapa de milhares de
+---- tiles -- da para pagar interpolacao em vez das 5 bandas do RampBand):
+----     0     carmim      -- a acao nao rende nada
+----     100   amarelo     -- empate; e o ponto que as CustomScoring usam como portao
+----     teto  mint        -- const.RATOAI.ExpectedRatioMax, o mesmo teto que a razao respeita
+----
+---- As tres cores saem das rampas acima (NEG_RAMP[5], POS_RAMP[3], POS_RAMP[5]), entao o painel
+---- continua com uma paleta so. O amarelo no pivo e reuso deliberado: nas camadas ele e o meio
+---- da rampa positiva, aqui e o meio da escala inteira -- nos dois casos "nem um extremo nem o
+---- outro".
+---------------------------------------------------------------------------------------------------
+local RATIO_CLR_LOW = {255, 0, 72}
+local RATIO_CLR_PIVOT = {232, 240, 55}
+local RATIO_CLR_HIGH = {0, 250, 200}
+local RATIO_CLR_NULL = {130, 130, 130}
+
 ---- largura maxima do painel, na mesma unidade do `MinWidth 300` do XTemplate do jogo.
 ---- Aumente se preferir o painel mais largo; o conteudo quebra linha sozinho.
 local PANEL_MAX_WIDTH = 700
@@ -191,6 +216,36 @@ local function ScoreColor(value, vmin, vmax)
         return POS_RAMP[#POS_RAMP]
     end
     return RampBand(Clamp(MulDivRound(value, 100, top), 0, 100), POS_RAMP)
+end
+
+---- interpolacao inteira entre duas cores, `t` em 0..100. Inteiro de proposito: este arquivo
+---- evita float (ver a regra de MulDivRound no CLAUDE.md) e aqui nao ha ganho nenhum em precisao
+---- fracionaria -- o destino e um `<color R G B>` de inteiros.
+----
+---- O Clamp por canal nao e decorativo: com delta NEGATIVO o arredondamento do MulDivRound pode
+---- passar do alvo por 1 e produzir componente fora de 0..255. Medido na ponta t=100 entre o
+---- amarelo (232) e o mint (0): saia `-1`, e a tag `<color -1 250 200>` nao e cor nenhuma.
+local function LerpClrTag(a, b, t)
+    t = Clamp(t, 0, 100)
+    return string.format("%d %d %d", Clamp(a[1] + MulDivRound(b[1] - a[1], t, 100), 0, 255),
+                         Clamp(a[2] + MulDivRound(b[2] - a[2], t, 100), 0, 255),
+                         Clamp(a[3] + MulDivRound(b[3] - a[3], t, 100), 0, 255))
+end
+
+---- cor de uma RAZAO de resultado esperado, para a tag `<color R G B>`. Ver o cabecalho das
+---- ancoras RATIO_CLR_* la em cima para o porque do pivo em 100.
+local function RatioColorTag(ratio)
+    if not ratio then
+        return LerpClrTag(RATIO_CLR_NULL, RATIO_CLR_NULL, 0)
+    end
+    if ratio >= 100 then
+        ---- acima do empate: o quanto da faixa [100, teto] ja foi percorrido
+        local teto = (const.RATOAI and const.RATOAI.ExpectedRatioMax) or 300
+        return LerpClrTag(RATIO_CLR_PIVOT, RATIO_CLR_HIGH,
+                          MulDivRound(ratio - 100, 100, Max(1, teto - 100)))
+    end
+    ---- abaixo do empate a faixa ja e 0..100, entao `ratio` e o proprio t
+    return LerpClrTag(RATIO_CLR_LOW, RATIO_CLR_PIVOT, ratio)
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -1080,12 +1135,27 @@ function RATODBG_ExpectedBlock(ctx)
     end
 
     for id, e in sorted_pairs(exp or empty_table) do
-        local ratio = e.ratio or 0
-        local cor = ratio >= 100 and "0 255 0" or ratio > 0 and "255 200 0" or "255 80 80"
+        ---- `ratio` nil = a linha nao chegou a comparar nada (limiar desligado pela constante, ou
+        ---- uma CustomScoring booleana que so tem `motivo`). Mostrar "razao 0" ali seria inventar
+        ---- um numero: 0 quer dizer "nao rende nada", que e uma afirmacao.
+        local ratio = e.ratio
+        local rotulo = ratio and string.format("razao %d", ratio) or "sem razao"
+        local par = ""
+        if ratio then
+            par = string.format("  (%d.%02d vs padrao %d.%02d)", (e.hits or 0) / 100,
+                                (e.hits or 0) % 100, (e.base or 0) / 100, (e.base or 0) % 100)
+            ---- DEBUG (D6): no MGSetup/PrepareWeapon o numerador e o LIMIAR, nao uma medicao --
+            ---- aquelas acoes nao disparam, entao nao ha o que medir. Marcado para ninguem ler o
+            ---- primeiro numero como acertos observados.
+            if e.proxy then
+                par = par .. "  <color 130 130 130>limiar-proxy</color>"
+            end
+        end
+
         text = text .. NL ..
-                   string.format("  %s: <color %s>razao %d</color>  (%d.%02d vs padrao %d.%02d)",
-                                 tostring(id), cor, ratio, (e.hits or 0) / 100, (e.hits or 0) % 100,
-                                 (e.base or 0) / 100, (e.base or 0) % 100)
+                   string.format("  %s: <color %s>%s</color>%s", tostring(id),
+                                 RatioColorTag(ratio), rotulo, par)
+
         local d = e.dbg
 
         ---- DEBUG (D4): CONTRA QUEM. O estimador nao escolhe alvo, ele recebe o
@@ -1110,10 +1180,25 @@ function RATODBG_ExpectedBlock(ctx)
             if d.cth then
                 text = text .. NL .. string.format("       CTH por nivel: %s", d.cth)
             end
-        elseif (e.hits or 0) == 0 then
+        elseif e.motivo then
+            ---- DEBUG (D6): antes so aparecia com `hits == 0` -- o MGSetup/PrepareWeapon
+            ---- tambem tem motivo a dizer quando JA rende (hits >= limiar), e a mudanca que
+            ---- passou a gravar esse ramo (ver RegistrarExpectedMG) ficaria muda sem isto.
             text = text .. NL ..
-                       string.format("       <color 130 130 130>(%s)</color>",
-                                     tostring(e.motivo or "0 acertos esperados"))
+                       string.format("       <color 130 130 130>(%s)</color>", tostring(e.motivo))
+        end
+
+        ---- DEBUG (D6): PESO, separado da RAZAO. `razao` acima e sempre hits/base x100 -- "quanto
+        ---- rende" --, nunca o peso do preset. `peso_base -> peso_final` e o outro numero, o que
+        ---- de fato entra na roleta do AISelectAction (ver pagina Acoes). So aparece quando a
+        ---- CustomScoring gravou (MGSetup, PrepareWeapon); as demais acoes nao multiplicam peso
+        ---- aqui dentro, esse trabalho e feito depois, fora da CustomScoring.
+        if e.peso_final ~= nil then
+            local mudou = e.peso_base ~= e.peso_final
+            text = text .. NL ..
+                       string.format("       peso: %d%s", e.peso_base or 0,
+                                     mudou and string.format(" -> <color 0 255 0>%d</color>",
+                                                             e.peso_final) or " (sem alteracao)")
         end
         if e.stance ~= nil or e.base_stance ~= nil then
             text = text .. NL ..
