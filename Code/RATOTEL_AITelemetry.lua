@@ -106,6 +106,325 @@ local function Emit(rec)
 end
 
 ---------------------------------------------------------------------------------------------------
+-- PROFILER DE IA  (PERF_PROFILING.md, camadas N1-N4)
+--
+-- Mora aqui, e nao em arquivo proprio, por um motivo pratico: este ja esta na lista `code` do
+-- metadata. Arquivo novo precisaria entrar por la E pelo items.lua do editor -- que foi
+-- exatamente a armadilha que deixou o SOURCE_AIPrecalcConeTargetZones dormente por meses.
+-- E o lugar tambem faz sentido: perfil E telemetria, e sai no MESMO registro JSONL.
+--
+-- LIGAR: `const.RATOAI.Profile = true` no console. Interruptor SEPARADO do RATOAI_Debug de
+-- proposito -- perfilar com o debug ligado mede as tabelas de debug (o PERF C9 tirou-as do
+-- caminho quente justamente para nao pagar por elas), ou seja, mede o overlay e nao a IA.
+--
+-- O QUE ELE MEDE, e por que cada coisa e medida do jeito que e:
+--
+--   N1  policies     tempo + alocacoes por CLASSE de AIPositioningPolicy. O laco OptLoc roda
+--                    A x (numero de instancias) vezes, e a coluna `n` dividida por `opt`
+--                    entrega quantas instancias daquela classe o arquetipo carrega -- e como
+--                    se ve que o RATOAI_Demolition paga AIPolicyGrenadeRange duas vezes.
+--   N2  fases        tempo dos globais que ninguem cronometra (AIPrecalcDamageScore e cia) e,
+--                    de brinde, os cinco rotulos `thihk_steps` do vanilla passam a existir no
+--                    TURNO REAL: o BeginStep so grava se receber debug_data, e o turno real
+--                    chama `behavior:Think(unit)` sem tabela (CombatCamera.lua:1004).
+--   N3  primitivas   CONTAGEM, nao cronometro. Uma chamada de CheckLOS esta ordens de grandeza
+--                    abaixo da resolucao util do relogio; somar deltas zerados daria zero. E a
+--                    contagem e melhor metrica de qualquer jeito: hoistar uma chamada faz o ms
+--                    cair com ruido, e faz a contagem cair de 9.600 para 400 sem discussao.
+--   N4  cardinalidade  #all_destinations, #destinations, #enemies. Sem elas, 40 ms com 300
+--                    destinos e 40 ms com 1.400 viram a mesma linha na planilha.
+--
+-- RESOLUCAO DO RELOGIO. GetPreciseTicks(precision) tem `precision` = ticks por segundo, default
+-- 1000 (ms). Aqui pedimos 1.000.000 (us), senao cada EvalDest individual arredondaria para 0 e a
+-- soma da policy inteira sairia zero. Se o relogio da maquina nao entregar essa resolucao, a
+-- coluna `z` (chamadas com delta zero) denuncia: z proximo de n quer dizer "nao confie no us
+-- desta linha, olhe as alocacoes e a contagem".
+--
+-- ALOCACOES (`al`) sao EXATAS -- nao tem resolucao nem ruido. Para este codigo, onde metade dos
+-- gargalos do PERF_PLAN e tabela criada dentro de laco, costuma ser o sinal mais acionavel.
+--
+-- QUANDO OS WRAPPERS SAO INSTALADOS: na PRIMEIRA unidade que raciocina depois de ligar o
+-- interruptor, nao no load. A ordem de carga entre este mod e o Rato's AI Overhaul nao e
+-- garantida, e varios destes globais SAO sobrescritos por la -- envolver no load poderia
+-- envolver a versao vanilla e ser substituido logo em seguida.
+--
+-- Uma vez instalados, ficam. Desligar o interruptor nao os remove: eles passam a ser um
+-- `if not cur then return f(...) end`, que e barato mas nao e zero. Para voltar ao custo zero,
+-- recarregue o mod.
+--
+-- REINSTALAR NAO EMPILHA: `nossos` guarda wrapper -> original, entao reinstalar depois de um
+-- reload de mod envolve sempre o ORIGINAL, nunca o wrapper anterior. Sem isso, cada reload
+-- somaria uma camada e as contagens dobrariam em silencio.
+---------------------------------------------------------------------------------------------------
+
+const.RATOAI = const.RATOAI or {}
+if const.RATOAI.Profile == nil then
+    const.RATOAI.Profile = false
+end
+
+local TICKS = 1000000 ---- microssegundos
+local MAX_LINHAS = 20 ---- teto por secao no JSONL
+
+---- bucket da unidade que esta sendo raciocinada AGORA, ou nil.
+---- Ponteiro unico e nao tabela por unidade porque think e play sao sequenciais e de uma unidade
+---- por vez; cada ponto de entrada salva o anterior e restaura, entao aninhamento nao mistura.
+local cur = nil
+local buckets = setmetatable({}, {__mode = "k"})
+local nossos = setmetatable({}, {__mode = "k"}) ---- wrapper -> funcao original
+
+local function novo_bucket()
+    return {pol = {}, ph = {}, cnt = {}, card = {}}
+end
+
+local function slot(tab, nome)
+    local s = tab[nome]
+    if not s then
+        s = {us = 0, n = 0, z = 0, al = 0}
+        tab[nome] = s
+    end
+    return s
+end
+
+local function creditar(s, t0, a0)
+    local dt = GetPreciseTicks(TICKS) - t0
+    s.us = s.us + dt
+    s.al = s.al + (GetAllocationsCount() - a0)
+    s.n = s.n + 1
+    if dt <= 0 then
+        s.z = s.z + 1
+    end
+end
+
+---- devolve a funcao ORIGINAL por tras de `f`, seja ela wrapper nosso ou nao
+local function cru(f)
+    return f and (nossos[f] or f)
+end
+
+---------------------------------------------------------------------------------------------------
+-- N2 -- fases. `table.unpack` aloca, mas estas rodam algumas vezes por turno, nao por destino.
+---------------------------------------------------------------------------------------------------
+
+---- Sem guarda de existencia, de proposito (regra do CLAUDE.md): GBO3 e o Rato's AI Overhaul
+---- sao dependencias duras. Se um destes globais nao existir, e melhor estourar na primeira
+---- chamada do que devolver `atual` e -- pior -- apagar o global no caminho.
+local function fase(nome, atual)
+    local f = cru(atual)
+    local w = function(...)
+        if not cur then
+            return f(...)
+        end
+        local s = slot(cur.ph, nome)
+        local t0, a0 = GetPreciseTicks(TICKS), GetAllocationsCount()
+        ---- table.pack e nao {f(...)}: um retorno nil NO MEIO faria `#r` truncar a lista e a
+        ---- funcao envolvida passaria a devolver menos coisa do que devolvia.
+        local r = table.pack(f(...))
+        creditar(s, t0, a0)
+        return table.unpack(r, 1, r.n)
+    end
+    nossos[w] = f
+    return w
+end
+
+---------------------------------------------------------------------------------------------------
+-- N3 -- contadores. `return f(...)` e chamada de cauda: preserva todos os retornos sem alocar.
+---------------------------------------------------------------------------------------------------
+
+local function contar(nome, atual)
+    local f = cru(atual)
+    local w = function(...)
+        if cur then
+            local c = cur.cnt
+            c[nome] = (c[nome] or 0) + 1
+        end
+        return f(...)
+    end
+    nossos[w] = f
+    return w
+end
+
+---------------------------------------------------------------------------------------------------
+-- instalacao
+---------------------------------------------------------------------------------------------------
+
+local instalado = false
+
+local function instalar()
+    if instalado then
+        return
+    end
+    instalado = true
+
+    ---- N1: uma entrada por CLASSE de policy. `rawget` de proposito -- so envolve quem tem
+    ---- EvalDest PROPRIO; herdado seria contado duas vezes, e o da classe base so tem um assert.
+    for nome, class in pairs(ClassDescendants("AIPositioningPolicy")) do
+        local f = cru(rawget(class, "EvalDest"))
+        if f then
+            local w = function(self, context, dest, grid_voxel)
+                if not cur then
+                    return f(self, context, dest, grid_voxel)
+                end
+                local s = slot(cur.pol, nome)
+                local t0, a0 = GetPreciseTicks(TICKS), GetAllocationsCount()
+                local v = f(self, context, dest, grid_voxel)
+                creditar(s, t0, a0)
+                return v
+            end
+            nossos[w] = f
+            class.EvalDest = w
+        end
+    end
+
+    ---- N2: fases
+    AIFindDestinations = fase("AIFindDestinations", AIFindDestinations)
+    AIFindOptimalLocation = fase("AIFindOptimalLocation", AIFindOptimalLocation)
+    AIPrecalcDamageScore = fase("AIPrecalcDamageScore", AIPrecalcDamageScore)
+    AIScoreReachableVoxels = fase("AIScoreReachableVoxels", AIScoreReachableVoxels)
+    AISelectAction = fase("AISelectAction", AISelectAction)
+
+    ---- AIScoreDest tem wrapper PROPRIO, e nao o `fase` generico, por um motivo que importa: ele
+    ---- roda uma vez POR DESTINO (milhares por turno), e o `fase` usa table.pack/unpack -- uma
+    ---- tabela por chamada. Isso injetaria custo no laco mais quente que existe aqui E poluiria
+    ---- a coluna `al` de tudo que roda dentro dele, que e justamente o numero que se quer olhar.
+    ---- Assinatura fixa, um retorno, zero alocacao.
+    local sd = cru(AIScoreDest)
+    local sd_w = function(context, policies, dest, grid_voxel, base_score, visual_voxels,
+                          score_details)
+        if not cur then
+            return sd(context, policies, dest, grid_voxel, base_score, visual_voxels,
+                      score_details)
+        end
+        local s = slot(cur.ph, "AIScoreDest")
+        local t0, a0 = GetPreciseTicks(TICKS), GetAllocationsCount()
+        local v = sd(context, policies, dest, grid_voxel, base_score, visual_voxels, score_details)
+        creditar(s, t0, a0)
+        return v
+    end
+    nossos[sd_w] = sd
+    AIScoreDest = sd_w
+
+    ---- N3: primitivas
+    CheckLOS = contar("CheckLOS", CheckLOS)
+    GetCoverPercentage = contar("GetCoverPercentage", GetCoverPercentage)
+    GetLoFData = contar("GetLoFData", GetLoFData)
+    get_recoil = contar("get_recoil", get_recoil)
+    AIGetAttackArgs = contar("AIGetAttackArgs", AIGetAttackArgs)
+    AICalcAttacksAndAim = contar("AICalcAttacksAndAim", AICalcAttacksAndAim)
+    RATOAI_ScoreAttacksDetailed = contar("ScoreAttacksDetailed", RATOAI_ScoreAttacksDetailed)
+    Unit.CalcChanceToHit = contar("CalcChanceToHit", Unit.CalcChanceToHit)
+
+    ---- N2: Think. Reaproveita o BeginStep/EndStep do vanilla passando uma tabela nossa -- tabela
+    ---- NOVA a cada chamada, porque o BeginStep tem `assert(not thihk_steps[label])`.
+    for _, class in pairs(ClassDescendants("AIBehavior")) do
+        local f = cru(rawget(class, "Think"))
+        if f then
+            ---- O Think NAO roda dentro de nenhum wrapper da telemetria: o controlador de
+            ---- execucao chama `behavior:Think(unit)` no laco de preparacao, antes de qualquer
+            ---- AIExecuteUnitBehavior (CombatCamera.lua:1004). Entao a ativacao e feita AQUI, a
+            ---- partir do bucket que o StartAI ja abriu para esta unidade.
+            local w = function(self, unit, debug_data)
+                local b = buckets[unit]
+                if not b then
+                    return f(self, unit, debug_data)
+                end
+                local prev = cur
+                cur = b
+                local dd = debug_data or {}
+                local s = slot(cur.ph, "Think")
+                local t0, a0 = GetPreciseTicks(TICKS), GetAllocationsCount()
+                local r = f(self, unit, dd)
+                creditar(s, t0, a0)
+                for _, step in ipairs(dd.thihk_steps or empty_table) do
+                    ---- indentado para sair aninhado sob o Think na listagem
+                    local ss = slot(cur.ph, "  " .. tostring(step.label))
+                    ss.us = ss.us + (step.time or 0) * 1000 ---- BeginStep mede em ms
+                    ss.n = ss.n + 1
+                end
+                cur = prev
+                return r
+            end
+            nossos[w] = f
+            class.Think = w
+        end
+    end
+end
+
+---------------------------------------------------------------------------------------------------
+-- API
+---------------------------------------------------------------------------------------------------
+
+---- bucket cru da unidade (ou nil). Lido pelo RATODBG_AIDebugUI.
+function RATOTEL_ProfFor(unit)
+    return buckets[unit]
+end
+
+---- Zera e ativa o bucket da unidade. Usado no comeco do raciocinio dela.
+local function ProfBegin(unit)
+    if not const.RATOAI.Profile then
+        return nil, false
+    end
+    instalar()
+    buckets[unit] = novo_bucket()
+    local prev = cur
+    cur = buckets[unit]
+    return prev, true
+end
+
+---- Reativa um bucket ja existente (fases que rodam depois do Think).
+local function ProfResume(unit)
+    if not const.RATOAI.Profile or not buckets[unit] then
+        return nil, false
+    end
+    local prev = cur
+    cur = buckets[unit]
+    return prev, true
+end
+
+local function ProfEnd(prev)
+    cur = prev
+end
+
+local function ordenar(tab)
+    local lista = {}
+    for nome, s in pairs(tab) do
+        lista[#lista + 1] = {
+            n = nome,
+            us = s.us,
+            c = s.n,
+            z = s.z ~= 0 and s.z or nil,
+            al = s.al ~= 0 and s.al or nil
+        }
+    end
+    table.sort(lista, function(a, b)
+        return (a.us or 0) > (b.us or 0)
+    end)
+    while #lista > MAX_LINHAS do
+        table.remove(lista)
+    end
+    return lista
+end
+
+---- forma serializavel, para o campo `prof` do JSONL
+local function ProfSnapshot(unit, context)
+    local b = buckets[unit]
+    if not b then
+        return nil
+    end
+    if context then
+        b.card.dests = #(context.destinations or empty_table)
+        b.card.opt = #(context.all_destinations or empty_table)
+        b.card.enemies = #(context.enemies or empty_table)
+    end
+    local cnt = {}
+    for nome, v in pairs(b.cnt) do
+        cnt[#cnt + 1] = {n = nome, c = v}
+    end
+    table.sort(cnt, function(x, y)
+        return x.c > y.c
+    end)
+    return {pol = ordenar(b.pol), ph = ordenar(b.ph), cnt = cnt, card = b.card}
+end
+
+---------------------------------------------------------------------------------------------------
 -- coleta
 ---------------------------------------------------------------------------------------------------
 
@@ -271,6 +590,10 @@ local function CaptureAfter(unit, rec, status)
         rec.degraded = ctx.__ratoai_degraded and true or nil
     end
 
+    ---- PROFILER (PERF_PROFILING.md). Sai no MESMO registro do resto, de proposito: o ms so
+    ---- significa alguma coisa ao lado da cardinalidade e do arquetipo que o produziu.
+    rec.prof = ProfSnapshot(unit, ctx)
+
     ---- decomposicao rodada AQUI de proposito: a unidade ja agiu, entao qualquer
     ---- efeito colateral em cache do context nao influencia decisao nenhuma
     if RECORD_BREAKDOWN and ctx then
@@ -298,13 +621,25 @@ Unit.ratotel_orig = Unit.ratotel_orig or {
 local orig = Unit.ratotel_orig
 
 function Unit:StartAI(debug_data, forced_behavior)
+    ---- O profiler tem interruptor PROPRIO (const.RATOAI.Profile) e precisa valer mesmo com a
+    ---- telemetria desligada -- perfilar com o debug ligado mede as tabelas de debug, que e
+    ---- justamente o que nao se quer medir. Sem este ramo, `Profile = true` sozinho nao abriria
+    ---- bucket nenhum e a pagina Perf ficaria eternamente vazia.
     if not ENABLED() then
-        return orig.StartAI(self, debug_data, forced_behavior)
+        local pprev = ProfBegin(self)
+        local res = orig.StartAI(self, debug_data, forced_behavior)
+        ProfEnd(pprev)
+        return res
     end
     ---- passamos um debug_data proprio quando o jogo nao passa nenhum: e a unica
     ---- forma de capturar os scores de behavior, e StartAI so ESCREVE nessa tabela
     local dd = debug_data or {}
+    ---- PROFILER: aqui comeca o raciocinio desta unidade neste turno -- e o unico ponto em que
+    ---- ZERAR o bucket faz sentido. O Think vem depois, num laco separado do controlador de
+    ---- execucao, e reativa este mesmo bucket.
+    local pprev = ProfBegin(self)
     local res = orig.StartAI(self, dd, forced_behavior)
+    ProfEnd(pprev)
     pcall(function()
         pending[self] = {ev = "turn", behs = SnapshotBehaviors(dd)}
     end)
@@ -312,7 +647,11 @@ function Unit:StartAI(debug_data, forced_behavior)
 end
 
 function AIChooseSignatureAction(context)
+    ---- PROFILER: no painel esta chamada acontece fora do AIExecuteUnitBehavior, entao sem esta
+    ---- ativacao o AISelectAction sairia zerado exatamente no caminho que se esta olhando.
+    local pprev = ProfResume(context.unit)
     local action = orig.AIChooseSignatureAction(context)
+    ProfEnd(pprev)
     if ENABLED() then
         pcall(function()
             local rec = pending[context.unit]
@@ -329,7 +668,10 @@ end
 
 function AIExecuteUnitBehavior(unit, force_or_skip_action)
     if not ENABLED() then
-        return orig.AIExecuteUnitBehavior(unit, force_or_skip_action)
+        local pprev = ProfResume(unit)
+        local status = orig.AIExecuteUnitBehavior(unit, force_or_skip_action)
+        ProfEnd(pprev)
+        return status
     end
 
     local rec = pending[unit]
@@ -338,7 +680,9 @@ function AIExecuteUnitBehavior(unit, force_or_skip_action)
         pcall(CaptureBefore, unit, rec)
     end
 
+    local pprev = ProfResume(unit)
     local status = orig.AIExecuteUnitBehavior(unit, force_or_skip_action)
+    ProfEnd(pprev)
 
     if rec then
         pcall(CaptureAfter, unit, rec, status)

@@ -731,7 +731,7 @@ end
 -- qualquer pagina.
 ---------------------------------------------------------------------------------------------------
 
-local PAGES = {"Controles", "Unidade", "Destinos", "Alvo", "Acoes", "Camadas"}
+local PAGES = {"Controles", "Unidade", "Destinos", "Alvo", "Acoes", "Camadas", "Perf"}
 
 ---- A pagina que abre por default e a que o "so <nome>" da barra restaura. Resolvida por
 ---- NOME e nao por indice: a ordem de PAGES ja mudou uma vez, e indice fixo faria o
@@ -877,7 +877,6 @@ local function PageUnidade(self, text)
     return text
 end
 
-
 ---------------------------------------------------------------------------------------------------
 -- FORCAR O DESTINO (E A POSTURA) DO TURNO
 --
@@ -955,7 +954,7 @@ local function OpcoesNoVoxel(self)
                 dest = dest,
                 stance = StancesList[si] or ("?" .. tostring(si)),
                 z = z,
-                ap = ctx.dest_ap and ctx.dest_ap[dest],
+                ap = ctx.dest_ap and ctx.dest_ap[dest]
             }
         end
     end
@@ -1023,9 +1022,10 @@ function RATODBG_ForceDestBlock(self)
 
     if not opts or #opts == 0 then
         text = text .. NL ..
-                   string.format("  tile %d,%d: <color 255 80 80>nao esta entre os destinos que a" ..
-                                 " IA calculou</color>   %s", px, py,
-                                 link("ClearForceDest", nil, "[limpar]", 255, 150, 150))
+                   string.format(
+                       "  tile %d,%d: <color 255 80 80>nao esta entre os destinos que a" ..
+                           " IA calculou</color>   %s", px, py,
+                       link("ClearForceDest", nil, "[limpar]", 255, 150, 150))
         return text
     end
 
@@ -1121,9 +1121,9 @@ function RATODBG_ExpectedBlock(ctx)
 
     if plan then
         local trocou = plan.best ~= plan.heur
-        local escolha = trocou and
-                            string.format("<color 0 255 0>m%s</color>", tostring(plan.best)) or
-                            string.format("m%s (mantida)", tostring(plan.best))
+        local escolha =
+            trocou and string.format("<color 0 255 0>m%s</color>", tostring(plan.best)) or
+                string.format("m%s (mantida)", tostring(plan.best))
         text = text .. NL ..
                    string.format("  MIRA heuristica m%s (%d.%02d) -> %s (%d.%02d)  margem %d%%",
                                  tostring(plan.heur), (plan.base or 0) / 100,
@@ -1153,8 +1153,8 @@ function RATODBG_ExpectedBlock(ctx)
         end
 
         text = text .. NL ..
-                   string.format("  %s: <color %s>%s</color>%s", tostring(id),
-                                 RatioColorTag(ratio), rotulo, par)
+                   string.format("  %s: <color %s>%s</color>%s", tostring(id), RatioColorTag(ratio),
+                                 rotulo, par)
 
         ---- DEBUG (D7): o A/B da mudanca de modelo. `razao` acima ja e a NOVA (turno contra
         ---- turno); esta linha abre o numerador e mostra a ANTIGA (N ataques da candidata) ao
@@ -1171,33 +1171,27 @@ function RATODBG_ExpectedBlock(ctx)
                 return string.format("%d.%02d", v / escala, (v % escala) * 100 / escala)
             end
             ---- o denominador, escrito por extenso -- e contra ELE que a razao e formada
-            text = text .. NL ..
-                       string.format(
-                           "       <color 150 150 150>denominador: %d.%02d  (%s ataques do padrao com %s AP)</color>",
-                           (e.base or 0) / 100, (e.base or 0) % 100, tostring(tn.m or "?"),
-                           ap(tn.ap_total))
+            text = text .. NL .. string.format(
+                       "       <color 150 150 150>denominador: %d.%02d  (%s ataques do padrao com %s AP)</color>",
+                       (e.base or 0) / 100, (e.base or 0) % 100, tostring(tn.m or "?"),
+                       ap(tn.ap_total))
 
             if tn.sustentado then
-                text = text .. NL ..
-                           string.format(
-                               "       <color 150 200 150>sustentada: %d.%02d  (%s ataques dela, sustenta o modo o turno todo)</color>",
-                               (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100,
-                               tostring(tn.n or "?"))
+                text = text .. NL .. string.format(
+                           "       <color 150 200 150>sustentada: %d.%02d  (%s ataques dela, sustenta o modo o turno todo)</color>",
+                           (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100, tostring(tn.n or "?"))
             else
                 local total = (tn.primeiro or 0) + (tn.resto or 0)
-                text = text .. NL ..
-                           string.format(
-                               "       <color 200 180 140>turno: %d.%02d (1 dela) + %d.%02d (%s do padrao com %s AP) = %d.%02d</color>",
-                               (tn.primeiro or 0) / 100, (tn.primeiro or 0) % 100,
-                               (tn.resto or 0) / 100, (tn.resto or 0) % 100,
-                               tostring(tn.k or "?"), ap(tn.ap_left), total / 100,
-                               total % 100)
+                text = text .. NL .. string.format(
+                           "       <color 200 180 140>turno: %d.%02d (1 dela) + %d.%02d (%s do padrao com %s AP) = %d.%02d</color>",
+                           (tn.primeiro or 0) / 100, (tn.primeiro or 0) % 100,
+                           (tn.resto or 0) / 100, (tn.resto or 0) % 100, tostring(tn.k or "?"),
+                           ap(tn.ap_left), total / 100, total % 100)
                 if e.ratio_antigo then
-                    text = text .. NL ..
-                               string.format(
-                                   "       <color 130 130 130>modelo antigo: razao %d  (%d.%02d = %s ataques dela, turno que nao acontece)</color>",
-                                   e.ratio_antigo, (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100,
-                                   tostring(tn.n or "?"))
+                    text = text .. NL .. string.format(
+                               "       <color 130 130 130>modelo antigo: razao %d  (%d.%02d = %s ataques dela, turno que nao acontece)</color>",
+                               e.ratio_antigo, (tn.sozinha or 0) / 100, (tn.sozinha or 0) % 100,
+                               tostring(tn.n or "?"))
                 end
             end
         end
@@ -1213,8 +1207,8 @@ function RATODBG_ExpectedBlock(ctx)
         if alvo then
             text = text .. NL ..
                        string.format("       <color 180 200 255>alvo: %s</color>%s", tostring(alvo),
-                                     dist and string.format("  (%d tiles)",
-                                                            dist / const.SlabSizeX) or "")
+                                     dist and string.format("  (%d tiles)", dist / const.SlabSizeX) or
+                                         "")
         end
 
         if d then
@@ -1241,10 +1235,9 @@ function RATODBG_ExpectedBlock(ctx)
         ---- aqui dentro, esse trabalho e feito depois, fora da CustomScoring.
         if e.peso_final ~= nil then
             local mudou = e.peso_base ~= e.peso_final
-            text = text .. NL ..
-                       string.format("       peso: %d%s", e.peso_base or 0,
-                                     mudou and string.format(" -> <color 0 255 0>%d</color>",
-                                                             e.peso_final) or " (sem alteracao)")
+            text = text .. NL .. string.format("       peso: %d%s", e.peso_base or 0, mudou and
+                                                   string.format(" -> <color 0 255 0>%d</color>",
+                                                                 e.peso_final) or " (sem alteracao)")
         end
         if e.stance ~= nil or e.base_stance ~= nil then
             text = text .. NL ..
@@ -1357,8 +1350,9 @@ local function PageAcoes(self, text)
                        link("UnitForceAction", i, string.format("%s: %s", action_name, val), 255,
                             255, 0)
         else
-            text = text .. string.format("\n  <color 130 130 130>%s: %s</color>%s", action_name,
-                                         val, motivo)
+            text = text ..
+                       string.format("\n  <color 130 130 130>%s: %s</color>%s", action_name, val,
+                                     motivo)
         end
     end
 
@@ -1459,8 +1453,8 @@ local function ThreatRaw(pol, context, dest, target_pos)
         if alive and PolicySeesEnemy(pol, context, enemy) then
             local att_pos = InflValidZ(enemy:GetPos())
             if IsValidPos(att_pos) then
-                raw[enemy] = RATOAI_ThreatRamp(att_pos:Dist(target_pos),
-                                               (pol:GetEnemyRange(enemy)), plateau)
+                raw[enemy] = RATOAI_ThreatRamp(att_pos:Dist(target_pos), (pol:GetEnemyRange(enemy)),
+                                               plateau)
             end
         end
     end
@@ -1592,8 +1586,7 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
                         ---- `d` explicito: o GetUncovered precisa da distancia para a
                         ---- rampa de CoverNearTiles e, sem receber, recalcula a mesma
                         ---- Dist() que a linha acima ja pagou
-                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm,
-                                                      d)
+                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm, d)
                     end
                     local net = MulDivRound(ramp, unc, 100)
                     bruta[enemy], liquida[enemy], cancelada[enemy] = ramp, net, ramp - net
@@ -1920,7 +1913,8 @@ function IModeAIDebug:Process(unit)
     end
     self.selected_unit = IsValidTarget(unit) and unit
     if IsValid(unit) and unit:IsAware() then
-        if unit:HasStatusEffect("ManningEmplacement") and not g_Combat:GetEmplacementAssignment(unit) then
+        if unit:HasStatusEffect("ManningEmplacement") and
+            not g_Combat:GetEmplacementAssignment(unit) then
             AIPlayCombatAction("MGLeave", unit, 0)
         end
 
@@ -1937,14 +1931,16 @@ function IModeAIDebug:Process(unit)
             local context = unit.ai_context
             self.ai_context = context
 
+            -- if action and action.id == "MGSetup" then
+            --    print("oi")
+            -- end
             context.behavior:Think(unit, self.think_data)
 
             local dest = context.ai_destination
             if dest then
                 context.dbg_enemy_damage_score = {}
                 context.dest_ap[dest] = context.dest_ap[dest] or unit.ActionPoints
-                AIPrecalcDamageScore(context, {dest},
-                                     context.target_locked or
+                AIPrecalcDamageScore(context, {dest}, context.target_locked or
                                          (context.dest_target or empty_table)[dest],
                                      context.dbg_enemy_damage_score)
             end
@@ -2017,8 +2013,7 @@ local function PageCamadas(self, text)
         end
         text = text .. string.format("\n   <color 120 245 255>CoverCancels ON</color>" ..
                                          "  <color 120 120 120>%s | plato %dt | saturacao %d</color>",
-                                     trust_txt, infl_pol.PlateauTiles or 0,
-                                     infl_pol:GetSaturation())
+                                     trust_txt, infl_pol.PlateauTiles or 0, infl_pol:GetSaturation())
         if infl_cover then
             text = text .. "\n   <color 255 120 120>ha uma Seek Cover nesta mesma lista:" ..
                        " contagem DOBRADA</color>"
@@ -2178,7 +2173,7 @@ local function BuildRows(ctx, dbg_dest, scored)
                 row = r,
                 score = score,
                 finalist = fin[target] or false,
-                sort = score or -1,
+                sort = score or -1
             }
         end
     end
@@ -2197,8 +2192,8 @@ end
 local function TargetCard(ctx, d, entry)
     local target = entry.target
     local r = entry.row
-    local text = string.format("\n\n<color 255 200 0>Detalhe #%s %s</color>  %s",
-                               num(entry.idx), tostring(target.session_id),
+    local text = string.format("\n\n<color 255 200 0>Detalhe #%s %s</color>  %s", num(entry.idx),
+                               tostring(target.session_id),
                                link("SetTargetFocus", target.handle, "[fechar]", 150, 150, 150))
 
     ---- CTH por disparo -- capturado por FUNCTION_ScoreAttacksDetailed sob RATOAI_Debug
@@ -2211,11 +2206,11 @@ local function TargetCard(ctx, d, entry)
         ---- depois de expandido bala a bala (BUGFIX B21). Em arma de tiro unico os
         ---- dois sao iguais e a coluna some.
         local balas = ctx.burst_shots or 1
-        local bursts = ctx.burst_hits_at and ctx.burst_hits_at[d] and
-                           ctx.burst_hits_at[d][target]
+        local bursts = ctx.burst_hits_at and ctx.burst_hits_at[d] and ctx.burst_hits_at[d][target]
         if balas > 1 then
-            text = text .. string.format(
-                       "\n<color 120 120 120>  atq mira  CTH  rajada x%d</color>", balas)
+            text = text ..
+                       string.format("\n<color 120 120 120>  atq mira  CTH  rajada x%d</color>",
+                                     balas)
         else
             text = text .. "\n<color 120 120 120>  atq mira  CTH</color>"
         end
@@ -2223,22 +2218,27 @@ local function TargetCard(ctx, d, entry)
             local exp = (bursts and bursts[i]) or cth
             soma = soma + exp
             if balas > 1 then
-                text = text .. string.format("\n   %-3d %-4s %4d %8d", i,
-                                             num(aims and aims[i]), cth, exp)
+                text = text ..
+                           string.format("\n   %-3d %-4s %4d %8d", i, num(aims and aims[i]), cth,
+                                         exp)
             else
-                text = text .. string.format("\n   %-3d %-4s %4d", i,
-                                             num(aims and aims[i]), cth)
+                text = text .. string.format("\n   %-3d %-4s %4d", i, num(aims and aims[i]), cth)
             end
         end
         if r.hit then
             ---- `hit - soma` e o recoil aplicado ENTRE ataques; o de DENTRO da rajada
             ---- ja esta em cada `exp`. Derivado, nao remontado: 0 = nao houve.
-            text = text .. string.format(
-                       "\n  soma %d | recoil pers %s | <color 255 255 255>hit %d</color> = %d.%02d acertos",
-                       soma, tostring((ctx.recoil_loss_at and ctx.recoil_loss_at[d] and ctx.recoil_loss_at[d][target]) or 0), r.hit, (r.hit - r.hit % 100) / 100, r.hit % 100)
+            text = text ..
+                       string.format(
+                           "\n  soma %d | recoil pers %s | <color 255 255 255>hit %d</color> = %d.%02d acertos",
+                           soma, tostring(
+                               (ctx.recoil_loss_at and ctx.recoil_loss_at[d] and
+                                   ctx.recoil_loss_at[d][target]) or 0), r.hit,
+                           (r.hit - r.hit % 100) / 100, r.hit % 100)
         end
     else
-        text = text .. "\n  <color 150 150 150>(sem CTH por disparo -- alvo descartado antes de pontuar)</color>"
+        text = text ..
+                   "\n  <color 150 150 150>(sem CTH por disparo -- alvo descartado antes de pontuar)</color>"
     end
 
     ---- cadeia do score
@@ -2258,14 +2258,16 @@ local function TargetCard(ctx, d, entry)
         if c.ff then
             text = text .. string.format("\n    x fogo amigo              %6s", num(c.ff))
         end
-        text = text .. string.format("\n    x randomizacao %3s%%       %6s", num(c.rnd_pct),
-                                     num(c.rnd))
+        text = text ..
+                   string.format("\n    x randomizacao %3s%%       %6s", num(c.rnd_pct), num(c.rnd))
         if c.group then
-            text = text .. string.format("\n    x grupo %3s%%              %6s", num(c.group_pct),
-                                         num(c.group))
+            text = text ..
+                       string.format("\n    x grupo %3s%%              %6s", num(c.group_pct),
+                                     num(c.group))
         end
-        text = text .. string.format("\n    <color 255 255 255>= score final             %6s</color>",
-                                     num(c.final))
+        text = text ..
+                   string.format("\n    <color 255 255 255>= score final             %6s</color>",
+                                 num(c.final))
     elseif r.reject then
         text = text .. string.format("\n\n  <color 255 150 150>descartado: %s</color>", r.reject)
     end
@@ -2300,8 +2302,9 @@ local function PageAlvo(self, text)
     end
 
     if dbg_dest then
-        text = text .. string.format("\n  AP no destino: %s   custo do ataque: %s",
-                                     format_ap(dbg_dest.ap), format_ap(dbg_dest.cost_ap))
+        text = text ..
+                   string.format("\n  AP no destino: %s   custo do ataque: %s",
+                                 format_ap(dbg_dest.ap), format_ap(dbg_dest.cost_ap))
         if dbg_dest.no_ap then
             text = text .. "  <color 255 150 150>(AP insuficiente -- nenhum alvo avaliado)</color>"
         end
@@ -2316,8 +2319,8 @@ local function PageAlvo(self, text)
     ---- colunas `score`, `CTH1` e `hits` da linha marcada com `>` na tabela abaixo.
     ---- Esta aba vive no limite da altura da tela; duplicar dado custa linha.
     text = text .. string.format("\n  recoil no alvo: %s | max_attacks: %s | balas/ataque: %s",
-                                 tostring(ctx.dest_target_recoil_cth and
-                                              ctx.dest_target_recoil_cth[d]),
+                                 tostring(
+                                     ctx.dest_target_recoil_cth and ctx.dest_target_recoil_cth[d]),
                                  tostring(ctx.max_attacks), tostring(ctx.burst_shots))
 
     ---- O SORTEIO. best_target nao e o de maior score: e um sorteio ponderado entre os
@@ -2375,11 +2378,13 @@ local function PageAlvo(self, text)
         ---- transformaria um 0 legitimo em "sim".
         local los_txt = (l == nil) and "-" or tostring(l):sub(1, 4)
 
-        text = text .. string.format("\n%s%s #%-2s %-14s %4s %-4s %-5s| %5s %4s %5s | %6s %4s  %s</color>",
-                                     marker, (target == chosen) and ">" or " ", num(e.idx),
-                                     tostring(target.session_id):sub(1, 14), slabs(dist), los_txt,
-                                     cover_txt(cover), num(r.shots), num(r.cth1), num(r.hit),
-                                     num(e.score), pct, status)
+        text = text ..
+                   string.format(
+                       "\n%s%s #%-2s %-14s %4s %-4s %-5s| %5s %4s %5s | %6s %4s  %s</color>",
+                       marker, (target == chosen) and ">" or " ", num(e.idx),
+                       tostring(target.session_id):sub(1, 14), slabs(dist), los_txt,
+                       cover_txt(cover), num(r.shots), num(r.cth1), num(r.hit), num(e.score), pct,
+                       status)
     end
 
     ---- links de detalhe numa linha so, para nao alargar a tabela
@@ -2392,7 +2397,6 @@ local function PageAlvo(self, text)
         end
         text = text .. "\n  detalhe: " .. table.concat(links, "  ")
     end
-
 
     ---- cartao do alvo aberto
     if self.dbg_target_focus then
@@ -2420,9 +2424,138 @@ local function PageControles(self, text)
     return text
 end
 
+---------------------------------------------------------------------------------------------------
+-- PAGINA PERF -- o perfil do turno da unidade selecionada
+--
+-- Os numeros vem do profiler do RATOTEL_AITelemetry (PERF_PROFILING.md). Esta pagina e a leitura
+-- AO VIVO de UMA unidade; o diagnostico de verdade e o campo `prof` do JSONL, que da a campanha
+-- inteira com distribuicao e cauda. Aqui e para iterar enquanto se mexe no codigo.
+--
+-- DUAS ADVERTENCIAS QUE MUDAM A LEITURA:
+--
+--  1. `AIScoreDest` CONTEM as policies -- ele e quem chama EvalDest. A diferenca entre o ms dele
+--     e a soma das policies e o custo do proprio laco (GetVisualVoxels, fogo/fumaca, marcadores
+--     de bias). Nao some as duas secoes.
+--
+--  2. Se `z` (chamadas com delta zero) chega perto de `n`, o relogio nao esta resolvendo aquela
+--     linha e o `ms` dela nao vale nada. Olhe `aloc` e `n/dest`, que sao exatos.
+---------------------------------------------------------------------------------------------------
+
+---- us -> "X.XX ms". Divisao inteira em toda parte: `/` aqui e truncado.
+local function ms(us)
+    us = us or 0
+    return string.format("%d.%02d", us / 1000, (us % 1000) / 10)
+end
+
+---- razao com duas casas, sem float
+local function razao(c, base)
+    if not base or base == 0 then
+        return "-"
+    end
+    local v = MulDivRound(c or 0, 100, base)
+    return string.format("%d.%02d", v / 100, v % 100)
+end
+
+local function ordenado(tab, campo)
+    local lista = {}
+    for nome, s in pairs(tab or empty_table) do
+        lista[#lista + 1] = {nome = nome, s = s}
+    end
+    table.sort(lista, function(a, b)
+        return (a.s[campo] or 0) > (b.s[campo] or 0)
+    end)
+    return lista
+end
+
+local function PagePerf(self, text)
+    local ligado = const.RATOAI and const.RATOAI.Profile
+
+    text = text .. "\n\n<color 255 200 0>Profiler</color>: " ..
+               link("ToggleProfile", nil, ligado and "[ligado]" or "desligado",
+                    ligado and 0 or 160, ligado and 255 or 160, ligado and 120 or 160) ..
+               "   <color 120 120 120>(const.RATOAI.Profile)</color>"
+
+    if not ligado then
+        text = text .. "\n  <color 160 160 160>Ligue e rode o turno de novo (begin turn):" ..
+                   " os wrappers entram na primeira unidade que raciocinar depois disso.</color>"
+        return text
+    end
+
+    local b = self.selected_unit and RATOTEL_ProfFor(self.selected_unit)
+    if not b then
+        text = text .. "\n  <color 160 160 160>Sem perfil para esta unidade ainda.</color>"
+        return text
+    end
+
+    local opt = b.card.opt or 0
+    local dests = b.card.dests or 0
+    if opt == 0 then
+        ---- o snapshot do JSONL preenche card no fim do turno; ao vivo, tira do context
+        local ctx = self.ai_context
+        if ctx then
+            opt = #(ctx.all_destinations or empty_table)
+            dests = #(ctx.destinations or empty_table)
+        end
+    end
+
+    text = text .. string.format(
+               "\n  cardinalidade: <color 255 255 255>%d</color> optloc |" ..
+                   " <color 255 255 255>%d</color> destinos | %d inimigos", opt, dests,
+               b.card.enemies or #((self.ai_context or empty_table).enemies or empty_table))
+
+    ---- FASES -----------------------------------------------------------------------------------
+    local fases = ordenado(b.ph, "us")
+    if #fases > 0 then
+        text = text .. "\n\n<color 255 200 0>Fases</color>   " ..
+                   "<color 120 120 120>ms / chamadas / aloc</color>"
+        for _, e in ipairs(fases) do
+            text = text .. string.format("\n  %-26s %8s  %6d  %9d", e.nome, ms(e.s.us), e.s.n,
+                                         e.s.al or 0)
+        end
+    end
+
+    ---- POLICIES --------------------------------------------------------------------------------
+    local pols = ordenado(b.pol, "us")
+    if #pols > 0 then
+        text = text .. "\n\n<color 255 200 0>Policies</color>   " ..
+                   "<color 120 120 120>ms / chamadas / por-dest / aloc</color>"
+        for _, e in ipairs(pols) do
+            local suspeito = e.s.z and e.s.n > 0 and (e.s.z * 2 > e.s.n)
+            text = text .. string.format("\n  %s%-28s %8s %6d %6s %9d%s",
+                                         suspeito and "<color 200 160 60>" or "", e.nome,
+                                         ms(e.s.us), e.s.n, razao(e.s.n, opt), e.s.al or 0,
+                                         suspeito and "  (relogio grosso)</color>" or "")
+        end
+    end
+
+    ---- PRIMITIVAS ------------------------------------------------------------------------------
+    local prims = {}
+    for nome, c in pairs(b.cnt or empty_table) do
+        prims[#prims + 1] = {nome = nome, c = c}
+    end
+    table.sort(prims, function(a, c)
+        return a.c > c.c
+    end)
+    if #prims > 0 then
+        text = text .. "\n\n<color 255 200 0>Primitivas</color>   " ..
+                   "<color 120 120 120>chamadas / por-dest</color>"
+        for _, e in ipairs(prims) do
+            text = text .. string.format("\n  %-28s %8d %8s", e.nome, e.c, razao(e.c, opt))
+        end
+    end
+
+    return text
+end
+
+function IModeAIDebug:ToggleProfile()
+    const.RATOAI = const.RATOAI or {}
+    const.RATOAI.Profile = not const.RATOAI.Profile
+    self:Update()
+end
+
 ---- MESMA ordem de PAGES -- as duas sao indexadas pelo mesmo numero
-local PAGE_FUNCS = {PageControles, PageUnidade, PageDestinos, PageAlvo, PageAcoes,
-                    PageCamadas}
+local PAGE_FUNCS = {PageControles, PageUnidade, PageDestinos, PageAlvo, PageAcoes, PageCamadas,
+                    PagePerf}
 
 ---------------------------------------------------------------------------------------------------
 
@@ -2572,7 +2705,8 @@ function IModeAIDebug:UnitExecuteTurn()
         local context = self.ai_context
 
         ---- canal oficial: e assim que o proprio jogo passa uma acao escolhida a mao
-        local descr = self.forced_action and (context.choose_actions or empty_table)[self.forced_action]
+        local descr = self.forced_action and
+                          (context.choose_actions or empty_table)[self.forced_action]
         local anterior = context.forced_signature_action
         context.forced_signature_action = descr and descr.action or nil
 
