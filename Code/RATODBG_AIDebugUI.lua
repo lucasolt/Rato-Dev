@@ -1196,11 +1196,11 @@ function RATODBG_ExpectedBlock(ctx)
             end
         end
 
-        local d = e.dbg
+        local d = e.trace
 
         ---- DEBUG (D4): CONTRA QUEM. O estimador nao escolhe alvo, ele recebe o
         ---- `dest_target[dest]`; sem esta linha "0 acertos" nao se distingue de "0 acertos
-        ---- contra o alvo errado". O `alvo` vem do dbg do RATOAI_ExpectedFor ou, nas
+        ---- contra o alvo errado". O `alvo` vem do trace do RATOAI_ExpectedFor ou, nas
         ---- CustomScoring que montam a linha a mao (MGSetup, PrepareWeapon), do proprio `e`.
         local alvo = (d and d.alvo) or e.alvo
         local dist = (d and d.dist) or e.dist
