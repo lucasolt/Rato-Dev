@@ -1,6 +1,7 @@
+Platform.rat = true
 Platform.developer = true
 Platform.cheats = true
-Platform.rat = true
+
 
 --[[
     CommonLua/Preset.lua:1808 define SaveCollapsedPresetGroups / LoadCollapsedPresetGroups
