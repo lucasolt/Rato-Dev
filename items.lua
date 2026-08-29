@@ -89,4 +89,8 @@ return {
 		'name', "AI_THINK_provisorio_teste_reload",
 		'CodeFileName', "Code/AI_THINK_provisorio_teste_reload.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "CheatsLogging",
+		'CodeFileName', "Code/CheatsLogging.lua",
+	}),
 }

@@ -707,6 +707,61 @@ function IModeAIDebug:ClearAILayer()
 end
 
 ---------------------------------------------------------------------------------------------------
+-- FILTRO DE AMEACA -- isolar quais inimigos contam
+--
+-- Com varios inimigos em campo, os termos da AIPolicyThreatExposure (rampa de distancia,
+-- cancelamento por cobertura, postura, custo de preparo) chegam ao tile SOMADOS. Um numero que e a
+-- soma de quatro coisas nao deixa verificar nenhuma delas. Restringindo a ameaca a um inimigo,
+-- cada termo fica legivel no rollover.
+--
+-- O estado mora em `const.RATOAI.ThreatOnly` (mod RATOAI, cabecalho em UTIL.lua) e nao em `self`:
+-- quem consome sao as policies, que rodam dentro do Think e nao enxergam o painel. Vazio/false =
+-- todos contam, que e o comportamento normal.
+--
+-- Como o filtro muda o RESULTADO do scoring e nao so a apresentacao, todo toggle re-roda o
+-- `Process` -- sem isso o painel mostraria os numeros do think anterior e pareceria quebrado.
+--
+-- A lista fica em `dbg_threat_ids` pelo mesmo motivo dos `dbg_labels_*`: o arg do link e um
+-- indice, e a ordem de `context.enemies` pode mudar entre redesenhos.
+---------------------------------------------------------------------------------------------------
+function IModeAIDebug:ToggleThreatUnit(arg)
+    local idx = tonumber(arg)
+    local id = idx and (self.dbg_threat_ids or empty_table)[idx]
+    if not id then
+        return
+    end
+    local only = const.RATOAI.ThreatOnly
+    if not only then
+        only = {}
+        const.RATOAI.ThreatOnly = only
+    end
+    only[id] = (not only[id]) or nil
+    ---- tabela vazia ja significa "sem filtro", mas deixar `{}` faria o `next()` do
+    ---- RATOAI_ThreatCounts rodar a toa em todo destino. Normaliza para false.
+    if next(only) == nil then
+        const.RATOAI.ThreatOnly = false
+    end
+    self:Process(self.selected_unit)
+end
+
+function IModeAIDebug:ClearThreatUnits()
+    const.RATOAI.ThreatOnly = false
+    self:Process(self.selected_unit)
+end
+
+---- Marca SO este -- o caso de uso comum (isolar um) em um clique, em vez de desmarcar os outros
+---- um a um.
+function IModeAIDebug:SoloThreatUnit(arg)
+    local idx = tonumber(arg)
+    local id = idx and (self.dbg_threat_ids or empty_table)[idx]
+    if not id then
+        return
+    end
+    const.RATOAI.ThreatOnly = {[id] = true}
+    self:Process(self.selected_unit)
+end
+
+---------------------------------------------------------------------------------------------------
 -- Update -- copia do original + secao de camadas
 ---------------------------------------------------------------------------------------------------
 
@@ -1571,16 +1626,43 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
         local stance = StancesList[stance_idx]
         local plateau = (threat_pol.PlateauTiles or 0) * const.SlabSizeX
 
+        ---------------------------------------------------------------------------
+        ---- Estes tres eram OMITIDOS aqui e aplicados no EvalDest, entao o painel e a
+        ---- policy davam numeros diferentes para o mesmo tile -- exatamente o que o
+        ---- cabecalho desta secao existe para impedir. `curve` ficou de fora desde
+        ---- sempre; `ThreatEffectMods` e o custo de preparo entraram depois e ninguem
+        ---- propagou. Resolvido uma vez, fora do laco.
+        ---------------------------------------------------------------------------
+        local curve = Clamp(threat_pol.FalloffCurve or 0, 0, 100)
+        local setup = threat_pol.SetupBias and (const.RATOAI.ThreatSetupBias ~= false)
+        local ready_pct, costly_pct
+        if setup then
+            ready_pct = (threat_pol.SetupReadyPct or 0) > 0 and threat_pol.SetupReadyPct or
+                            (const.RATOAI.ThreatSetupReady or 100)
+            costly_pct = (threat_pol.SetupCostlyPct or 0) > 0 and threat_pol.SetupCostlyPct or
+                             (const.RATOAI.ThreatSetupCostly or 100)
+            if ready_pct == 100 and costly_pct == 100 then
+                setup = false
+            end
+        end
+
+        ---- BUGFIX (B49): teto de um inimigo so. Sai da propria policy para os dois lados
+        ---- nunca discordarem -- e o mesmo motivo de `ThreatNormalize` chamar GetSaturation.
+        local ceiling = threat_pol:GetEnemyCeiling()
+
         local bruta, cancelada, liquida = {}, {}, {}
         local sb, sl = 0, 0
         for _, enemy in ipairs(context.enemies or empty_table) do
             local alive = IsValid(enemy) and not (enemy:IsDead() or enemy:IsDowned())
-            if alive and PolicySeesEnemy(threat_pol, context, enemy) then
+            ---- DEBUG (D8): mesmo filtro de isolamento que a policy usa. Sem ele o painel
+            ---- mostraria ameaca de quem o filtro tirou da conta.
+            if alive and RATOAI_ThreatCounts(enemy) and
+                PolicySeesEnemy(threat_pol, context, enemy) then
                 local att_pos = InflValidZ(enemy:GetPos())
                 if IsValidPos(att_pos) then
                     local range, is_firearm = threat_pol:GetEnemyRange(enemy)
                     local d = att_pos:Dist(target_pos)
-                    local ramp = RATOAI_ThreatRamp(d, range, plateau)
+                    local ramp = RATOAI_ThreatRamp(d, range, plateau, curve)
                     local unc = 100
                     if ramp > 0 then
                         ---- `d` explicito: o GetUncovered precisa da distancia para a
@@ -1588,9 +1670,30 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
                         ---- Dist() que a linha acima ja pagou
                         unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm, d)
                     end
-                    local net = MulDivRound(ramp, unc, 100)
-                    bruta[enemy], liquida[enemy], cancelada[enemy] = ramp, net, ramp - net
-                    sb, sl = sb + ramp, sl + net
+
+                    ---- Os fatores por inimigo (status effect, custo de preparo) escalam a
+                    ---- ameaca DELE, e por isso entram nos DOIS lados -- bruta e liquida.
+                    ---- Aplicar so na liquida jogaria o efeito deles dentro de `cancelada`,
+                    ---- que quer dizer "o que a COBERTURA tirou" e passaria a mentir.
+                    local mods = RATOAI_ThreatEnemyFactor(enemy, context)
+                    if setup then
+                        mods = MulDivRound(mods, RATOAI_SetupFactor(enemy, context, target_pos,
+                                                                    ready_pct, costly_pct), 100)
+                    end
+
+                    local raw = (mods == 100) and ramp or MulDivRound(ramp, mods, 100)
+                    local net = MulDivRound(raw, unc, 100)
+                    ---- BUGFIX (B49): mesmo clamp por inimigo que o EvalDest aplica. Sem
+                    ---- ele o painel mostraria um inimigo valendo mais que o teto e a soma
+                    ---- das linhas nao bateria com o numero do slab.
+                    if raw > ceiling then
+                        raw = ceiling
+                    end
+                    if net > ceiling then
+                        net = ceiling
+                    end
+                    bruta[enemy], liquida[enemy], cancelada[enemy] = raw, net, raw - net
+                    sb, sl = sb + raw, sl + net
                 end
             end
         end
@@ -1809,9 +1912,30 @@ function IModeAIDebug:DrawInfluenceLines()
     ---- preciso trocar de modo so para comparar
     local head = string.format("%+d", total)
     if cancels then
-        head = head ..
-                   string.format("   [bruta %+d | cancelada %+d | liquido %+d]", totals.bruta,
-                                 totals.cancelada, totals.liquida)
+        ---------------------------------------------------------------------------
+        ---- `[bruta | cancelada | liquido]` era impresso SEMPRE -- e quando a cobertura
+        ---- nao cancela nada (o caso comum) os tres numeros sao identicos, entao a linha
+        ---- gastava tres campos para repetir o mesmo valor ao lado do total que ja esta
+        ---- ali. Era o principal ruido visual da camada. Agora so aparece quando ha de
+        ---- fato uma diferenca para mostrar.
+        ----
+        ---- No lugar entra a ESCALA, que e o que faltava para o numero significar algo
+        ---- sem divisao mental: quanto vale um inimigo e onde e o piso da policy.
+        ---------------------------------------------------------------------------
+        if totals.cancelada ~= 0 then
+            head = head ..
+                       string.format("   [bruta %+d | cobertura %+d]", totals.bruta,
+                                     totals.cancelada)
+        end
+        if threat_pol then
+            local w = threat_pol.Weight or 100
+            local sat = threat_pol:GetSaturation()
+            local ceil = threat_pol:GetEnemyCeiling()
+            head = head ..
+                       string.format("   (1 inim max %d | piso %d | soma %d/%d)",
+                                     MulDivRound(MulDivRound(threat_pol.Penalty, ceil, sat), w, 100),
+                                     MulDivRound(threat_pol.Penalty, w, 100), soma_raw, sat)
+        end
         if soma_raw == 0 and totals.bruta ~= 0 then
             head = head .. "  (cobertura cancelou TUDO)"
         end
@@ -2421,6 +2545,44 @@ local function PageControles(self, text)
 
     text = text .. "\n\n" .. link("ProcessEmplacements", "assign", "Assign Emplacements (Team)")
     text = text .. "\n" .. link("ProcessEmplacements", "reset", "Reset Emplacements Appeal (Team)")
+
+    -----------------------------------------------------------------------------------------------
+    -- Quem conta como AMEACA (ver o cabecalho de ToggleThreatUnit)
+    -----------------------------------------------------------------------------------------------
+    local ctx = self.ai_context
+    local enemies = ctx and ctx.enemies
+    if enemies and #enemies > 0 then
+        local only = const.RATOAI.ThreatOnly
+        local filtrando = only and next(only) ~= nil
+
+        self.dbg_threat_ids = {}
+        for i, e in ipairs(enemies) do
+            self.dbg_threat_ids[i] = e.session_id
+        end
+
+        text = text .. "\n\n<color 255 160 80>Contam como ameaca</color>"
+        if filtrando then
+            text = text .. "   " ..
+                       link("ClearThreatUnits", nil, "todos de volta", 255, 120, 120)
+            text = text .. "\n   <color 200 140 60>FILTRO ATIVO -- a IA esta cega para o resto. " ..
+                       "So para inspecionar.</color>"
+        else
+            text = text .. "   <color 130 130 130>(todos)</color>"
+        end
+
+        for i, e in ipairs(enemies) do
+            local on = (not filtrando) or only[e.session_id]
+            local box = link("ToggleThreatUnit", i, on and "[x]" or "[ ]", on and 255 or 130,
+                             on and 160 or 130, on and 80 or 130)
+            ---- "so" some quando ja e o unico marcado: naquele estado o clique nao mudaria nada
+            local solo = ""
+            if not (filtrando and only[e.session_id] and #table.keys(only) == 1) then
+                solo = "  " .. link("SoloThreatUnit", i, "so", 150, 210, 255)
+            end
+            text = text .. "\n  " .. box .. " " .. tostring(e.session_id) .. solo
+        end
+    end
+
     return text
 end
 

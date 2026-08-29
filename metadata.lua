@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 630,
+	'version', 633,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -27,9 +27,10 @@ return PlaceObj('ModDef', {
 		"Code/RATOTEL_AITelemetry.lua",
 		"Code/Rebuild.lua",
 		"Code/AI_THINK_provisorio_teste_reload.lua",
+		"Code/CheatsLogging.lua",
 	},
 	'default_options', {},
-	'saved', 1787876172,
-	'code_hash', -2732758057182356440,
+	'saved', 1787968626,
+	'code_hash', 6068380166499607380,
 	'affected_resources', {},
 })
