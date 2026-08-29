@@ -3,6 +3,14 @@ return {
 		'name', "Utility",
 	}, {
 		PlaceObj('ModItemCode', {
+			'name', "Rebuild",
+			'CodeFileName', "Code/Rebuild.lua",
+		}),
+		PlaceObj('ModItemCode', {
+			'name', "CheatsLogging",
+			'CodeFileName', "Code/CheatsLogging.lua",
+		}),
+		PlaceObj('ModItemCode', {
 			'name', "ForceDev",
 			'CodeFileName', "Code/ForceDev.lua",
 		}),
@@ -82,15 +90,11 @@ return {
 		}),
 		}),
 	PlaceObj('ModItemCode', {
-		'name', "Rebuild",
-		'CodeFileName', "Code/Rebuild.lua",
-	}),
-	PlaceObj('ModItemCode', {
 		'name', "AI_THINK_provisorio_teste_reload",
 		'CodeFileName', "Code/AI_THINK_provisorio_teste_reload.lua",
 	}),
 	PlaceObj('ModItemCode', {
-		'name', "CheatsLogging",
-		'CodeFileName', "Code/CheatsLogging.lua",
+		'name', "get_range_provisorio",
+		'CodeFileName', "Code/get_range_provisorio.lua",
 	}),
 }
