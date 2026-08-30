@@ -70,6 +70,38 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
         ['Critical Chance'] = results.crit_chance
     }
 
+    -- CtH de cada tiro em ataques multishot
+    do
+        local function collect_shot_cth(shots)
+            local t = {}
+            for i, shot in ipairs(shots or empty_table) do
+                t[i] = tostring(shot.cth or shot.chance_to_hit or "?")
+            end
+            return t
+        end
+        local per_shot
+		local t 
+        if results.attacks then -- multi-weapon (DualShot)
+            local parts = {}
+            for ai, attack in ipairs(results.attacks) do
+                t = collect_shot_cth(attack.shots)
+                if #t > 0 then
+                    parts[#parts + 1] = "w" .. ai .. ": " .. table.concat(t, " | ")
+                end
+            end
+            per_shot = #parts > 0 and table.concat(parts, "   ") or nil
+        else
+            t = collect_shot_cth(results.shots)
+            per_shot = #t > 0 and table.concat(t, " | ") or nil
+        end
+
+        if per_shot then
+            info['Chance to Hit per shot'] = per_shot
+            info['Chance to Hit per shot loss'] = results.GBO_debug_cth_loss_per_shot--attack_args and attack_args.cth_loss_per_shot
+			info['Chance to Hit recoil cone ratio mul'] = results.GBO_debug_recoil_cone_ratios
+		end
+    end
+
     for i, mod in ipairs(results.chance_to_hit_modifiers) do
         local id = mod.id or "Stat"
         if id == "HipshotPenalty" then

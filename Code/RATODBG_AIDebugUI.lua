@@ -8,48 +8,20 @@
 ----      dinamicamente a partir das tabelas de score_details
 ----   3. formatacao condicional por cor nos modos de score
 ----
----- So para teste. Nao publicar.
----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------
 -- PARAMETROS  (tudo local; edite aqui e recarregue o mod)
 ---------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------
----- ESCALA DIVERGENTE
-----
----- O sinal e a cor (vermelho = negativo, mint = positivo) e a MAGNITUDE e a saturacao:
----- perto do zero as duas rampas desbotam para o mesmo cinza, longe do zero saturam.
----- Assim "quase neutro" le como quase neutro dos dois lados, e o olho encontra os
----- extremos sem precisar ler numero.
-----
----- Vermelho e exclusivo do lado negativo -- por isso a rampa positiva nao passa mais
----- por vermelho/laranja/amarelo. O preco e menos variacao de matiz no positivo; a
----- compensacao vem da saturacao, que agora carrega a informacao.
-----
----- Luminancia alta em toda a escala, de proposito: PlaceTextFx pinta o texto com a
----- MESMA cor do quadrado, entao tom escuro sobre mapa escuro fica ilegivel. Por isso
----- o extremo negativo e vermelho vivo e nao vermelho-sangue.
+
 ---------------------------------------------------------------------------------------------------
 ---- zero exato, ou tile sem valor
 local CLR_ZERO = RGB(125, 128, 132)
 
----- As duas rampas foram espacadas medindo deltaE (CIE76) entre vizinhos, e nao a olho.
----- A rampa violeta anterior tinha um par com deltaE 9,3 -- indistinguivel na pratica.
----- Aqui o menor passo e ~22 nas duas, e o L* varia pouco DENTRO de cada rampa, entao a
----- leitura vem da saturacao/matiz e nao de "uma e mais clara que a outra".
-
----- positivo: indice 1 = quase zero (cinza esverdeado), 5 = melhor (mint saturado),
----- com AMARELO no meio -- so saturacao nao dava passos grandes o bastante entre as
----- bandas do meio. passos deltaE: 48.2, 34.7, 50.6, 33.1
----- O amarelo nao conflita com o vermelho do lado negativo: o par mais proximo entre as
----- duas rampas continua sendo o das pontas desbotadas (deltaE 19.7), e nao o amarelo.
 local POS_RAMP = {
     RGB(152, 170, 160), RGB(200, 215, 115), RGB(232, 240, 55), RGB(120, 240, 130), RGB(0, 250, 200)
 }
 
----- negativo: indice 1 = quase zero (cinza avermelhado), 5 = pior (vermelho saturado)
----- passos deltaE: 31.3, 31.3, 22.4, 24.5
----- O extremo puxa para carmim (255,0,72) em vez de vermelho puro: entre (250,40,26) e
----- (255,22,22) o olho nao separava nada -- era o mesmo defeito da rampa violeta.
 local NEG_RAMP = {
     RGB(180, 150, 150), RGB(214, 118, 108), RGB(236, 80, 62), RGB(250, 40, 26), RGB(255, 0, 72)
 }
@@ -57,53 +29,20 @@ local NEG_RAMP = {
 ---- cortes do gradiente, em % da faixa [min, max]
 local RAMP_STOPS = {20, 40, 60, 80}
 
----------------------------------------------------------------------------------------------------
----- ESCALA DA RAZAO -- PIVO EM 100, NAO EM ZERO
-----
----- A razao de resultado esperado empata em 100 ("a acao rende o mesmo que so atirar"), nao em
----- zero. A escala divergente das camadas nao serve aqui: la o ponto neutro e o zero, e usa-la
----- pintaria 99 e 1 da mesma cor -- que foi exatamente o defeito da versao anterior
----- (`ratio >= 100 and verde or ratio > 0 and amarelo or vermelho`: so o zero exato era
----- vermelho, e todo o intervalo 1..99 saia amarelo, indistinguivel).
-----
----- Tres ancoras, INTERPOLADAS de verdade (e uma linha de texto, nao um mapa de milhares de
----- tiles -- da para pagar interpolacao em vez das 5 bandas do RampBand):
-----     0     carmim      -- a acao nao rende nada
-----     100   amarelo     -- empate; e o ponto que as CustomScoring usam como portao
-----     teto  mint        -- const.RATOAI.ExpectedRatioMax, o mesmo teto que a razao respeita
-----
----- As tres cores saem das rampas acima (NEG_RAMP[5], POS_RAMP[3], POS_RAMP[5]), entao o painel
----- continua com uma paleta so. O amarelo no pivo e reuso deliberado: nas camadas ele e o meio
----- da rampa positiva, aqui e o meio da escala inteira -- nos dois casos "nem um extremo nem o
----- outro".
----------------------------------------------------------------------------------------------------
+
 local RATIO_CLR_LOW = {255, 0, 72}
 local RATIO_CLR_PIVOT = {232, 240, 55}
 local RATIO_CLR_HIGH = {0, 250, 200}
 local RATIO_CLR_NULL = {130, 130, 130}
 
----- largura maxima do painel, na mesma unidade do `MinWidth 300` do XTemplate do jogo.
----- Aumente se preferir o painel mais largo; o conteudo quebra linha sozinho.
+
 local PANEL_MAX_WIDTH = 700
 
----- finalista = passou o corte de AIDecisionThreshold. Branco de proposito: nenhuma das
----- duas rampas produz branco, entao nao ha como confundir com "score alto".
+
 local CLR_FINALIST = RGB(255, 255, 255)
 local RING_SCALE = 165 ---- % do tamanho do quadrado normal
 
----- Os tres modos existem nos DOIS regimes, mas significam coisas diferentes:
-----
-----   duas policies (CoverCancels desligado)
-----     threat = a fatia da AIPolicyThreatExposure
-----     cover  = a fatia da AIPolicyCustomSeekCover
-----     sum    = as duas somadas
-----
-----   uma policy so (CoverCancels ligado)
-----     threat = a ameaca BRUTA do inimigo, como se nao houvesse cobertura nenhuma
-----     cover  = quanto a cobertura CANCELOU dessa ameaca (credito, positivo)
-----     sum    = o que sobrou de fato, e o que a policy devolve
-----
----- Nos dois regimes vale `threat + cover = sum`, por inimigo e no total.
+
 local INFL_MODES = {
     {id = "threat", name = "Ameaca", name_cancel = "Ameaca BRUTA"},
     {id = "cover", name = "Cobertura", name_cancel = "Cobertura CANCELOU"},
@@ -174,15 +113,6 @@ end
 ---------------------------------------------------------------------------------------------------
 -- formatacao condicional
 ---------------------------------------------------------------------------------------------------
-
----- cor de `value` dentro da faixa [vmin, vmax]
-----
----- Positivos e negativos sao escalados SEPARADAMENTE, cada um contra o proprio extremo:
----- o positivo contra vmax, o negativo contra vmin. Escalar os dois juntos sobre o span
----- inteiro faria o zero cair no meio de uma rampa continua, e um -1 num mapa que vai de
----- -200 a +100 apareceria com cor de "bem ruim" em vez de "quase neutro".
----- t (0..100) -> indice de banda numa rampa de 5. Bandas explicitas porque divisao em
----- Lua devolve float e ramp[4.5] seria nil.
 local function RampBand(t, ramp)
     local idx = #ramp
     for i, stop in ipairs(RAMP_STOPS) do
@@ -208,9 +138,6 @@ local function ScoreColor(value, vmin, vmax)
         return RampBand(Clamp(MulDivRound(-value, 100, -worst), 0, 100), NEG_RAMP)
     end
 
-    ---- A escala positiva sempre parte do ZERO, nunca de vmin. Esticar entre vmin e vmax
-    ---- (como antes) fazia o menor positivo do mapa aparecer sempre desbotado mesmo
-    ---- sendo alto -- e agora que a saturacao significa magnitude, isso mentiria.
     local top = Max(0, vmax or 0)
     if top <= 0 then
         return POS_RAMP[#POS_RAMP]
@@ -218,13 +145,6 @@ local function ScoreColor(value, vmin, vmax)
     return RampBand(Clamp(MulDivRound(value, 100, top), 0, 100), POS_RAMP)
 end
 
----- interpolacao inteira entre duas cores, `t` em 0..100. Inteiro de proposito: este arquivo
----- evita float (ver a regra de MulDivRound no CLAUDE.md) e aqui nao ha ganho nenhum em precisao
----- fracionaria -- o destino e um `<color R G B>` de inteiros.
-----
----- O Clamp por canal nao e decorativo: com delta NEGATIVO o arredondamento do MulDivRound pode
----- passar do alvo por 1 e produzir componente fora de 0..255. Medido na ponta t=100 entre o
----- amarelo (232) e o mint (0): saia `-1`, e a tag `<color -1 250 200>` nao e cor nenhuma.
 local function LerpClrTag(a, b, t)
     t = Clamp(t, 0, 100)
     return string.format("%d %d %d", Clamp(a[1] + MulDivRound(b[1] - a[1], t, 100), 0, 255),
@@ -232,8 +152,7 @@ local function LerpClrTag(a, b, t)
                          Clamp(a[3] + MulDivRound(b[3] - a[3], t, 100), 0, 255))
 end
 
----- cor de uma RAZAO de resultado esperado, para a tag `<color R G B>`. Ver o cabecalho das
----- ancoras RATIO_CLR_* la em cima para o porque do pivo em 100.
+
 local function RatioColorTag(ratio)
     if not ratio then
         return LerpClrTag(RATIO_CLR_NULL, RATIO_CLR_NULL, 0)
@@ -279,16 +198,6 @@ local function PolicyValue(scores, label)
     return found and total or nil
 end
 
----------------------------------------------------------------------------------------------------
--- Selecao multipla de policies (estado)
---
--- Guardada por LABEL, nao por indice: `dbg_labels_*` e reconstruido a cada Update e a
--- ordem muda quando uma policy some da lista (uma Required que falhou, por exemplo).
--- Indice sobreviveria ao redesenho apontando para outra policy.
---
--- Separada por escopo, porque a mesma policy pode ter pesos diferentes em OptLoc e End
--- Turn -- somar as duas seria somar coisas de escalas diferentes.
----------------------------------------------------------------------------------------------------
 
 local function SumSelection(self, scope)
     self.dbg_sum_sel = self.dbg_sum_sel or {}
@@ -1994,41 +1903,6 @@ function IModeAIDebug:Done(...)
 end
 
 ---------------------------------------------------------------------------------------------------
--- DEBUG (D3): O PAINEL PONTUAVA AS ACOES NUM MOMENTO DO PIPELINE QUE O TURNO REAL NAO TEM
---
--- COPIA de IModeAIDebug:Process (Lua/UI/IModeAIDebug.lua:117), com a ORDEM das duas ultimas
--- chamadas trocada. O vanilla faz:
---
---     context.behavior:Think(...)
---     AIChooseSignatureAction(context)                       <- CustomScoring roda AQUI
---     AIPrecalcDamageScore(context, {ai_destination}, ...)   <- alvo do destino so DEPOIS
---
--- e o turno real (AIPlayAttacks, CombatAI.lua:216-232) faz o contrario: precalc do destino
--- unico PRIMEIRO, escolha da signature DEPOIS.
---
--- POR QUE ISSO IMPORTA, e nao e detalhe: toda CustomScoring le `context.dest_target[upos]`
--- (via GetDestArgs), e o precalc de destino unico REESCREVE esse alvo. Medido no processo vivo
--- com o LegionGunner:412 -- a MGSetup_CustomScoring pontuou contra um alvo a 20 tiles com CTH 0
--- (razao 250, "rende 0.00") enquanto a pagina Alvo, redesenhada depois do precalc, mostrava o
--- alvo real a 3 tiles com CTH 47 e 2.1 acertos. As duas paginas do MESMO painel falavam de
--- momentos diferentes, e a 3 tiles aquela acao teria sido DESABILITADA pelo portao de close
--- range. Era um bug fantasma inteiro, so do observador.
---
--- Alem da ordem, replica dois detalhes do AIPlayAttacks que o vanilla do painel nao tem:
---   * `dest_ap[dest] = dest_ap[dest] or unit.ActionPoints` -- no-op quando o destino ja foi
---     orcado (o caso normal), mas e a linha que da orcamento ao destino que nao foi;
---   * `preferred_target` -- no turno real o alvo que o sweep escolheu para aquele destino tem
---     PREFERENCIA no recalculo (SOURCE_AIPrecalcDamageScore.lua:520 da `break` nele). Passando
---     nil, como o vanilla do painel faz, o alvo e re-escolhido do zero e o painel pode mostrar
---     um alvo que o turno nao usaria.
---
--- LIMITE CONHECIDO, fica registrado: o AIPlayAttacks remove o `FreeMove` antes de tudo isso
--- (CombatAI.lua:203) e aqui nao da para remover -- seria mexer no estado da unidade fora do
--- turno dela. Para destinos DENTRO da franquia de free move, o `leftover_free` do BUGFIX (B19)
--- desconta aqui e nao la, e a contagem de ataques do painel sai por um tiro de diferenca.
---
--- O redesenho das linhas de influencia continua aqui: Process troca o ai_context, e as linhas
--- no ar apontariam para numeros do context antigo ate o mouse trocar de tile.
 ---------------------------------------------------------------------------------------------------
 function IModeAIDebug:Process(unit)
     if not CurrentThread() then
@@ -2055,9 +1929,7 @@ function IModeAIDebug:Process(unit)
             local context = unit.ai_context
             self.ai_context = context
 
-            -- if action and action.id == "MGSetup" then
-            --    print("oi")
-            -- end
+
             context.behavior:Think(unit, self.think_data)
 
             local dest = context.ai_destination
@@ -2824,34 +2696,6 @@ end
 
 ---------------------------------------------------------------------------------------------------
 -- EXECUTAR TURNO FIEL AO CONTROLADOR REAL
---
--- O UnitExecuteTurn do jogo (IModeAIDebug.lua:296) remonta a execucao a mao e diverge do que o
--- AIExecutionController de fato faz (CombatCamera.lua:1025-1199 + AIExecuteUnitBehavior). Tres
--- diferencas, todas capazes de produzir um turno que nao acontece assim em jogo:
---
---   1. RESULTADO DO MOVIMENTO IGNORADO. O controlador real faz
---          result = behavior:BeginMovement(unit, trackMove)
---          if result ~= "continue" then ... break
---      ou seja, movimento interrompido (mina, overwatch, "restart") PARA a execucao. O painel
---      descartava o retorno e seguia atacando a partir de um estado que o jogo teria abortado.
---
---   2. EXECUCAO REMONTADA. O painel chamava `behavior:Play(unit)` e depois `AIPlayAttacks` na mao.
---      O caminho real e AIExecuteUnitBehavior(unit), que faz o Play, TRATA O STATUS que ele
---      devolve (behaviors podem pedir "restart"/parada) e so entao vai para os ataques. Pular a
---      funcao e pular esse tratamento.
---
---   3. ACAO FORCADA POR FORA. O engine ja tem canal proprio -- `context.forced_signature_action`,
---      que o AIExecuteUnitBehavior repassa como `dbg_action`. O painel injetava direto no
---      AIPlayAttacks, o que obriga a pular o item 2.
---
--- Esta versao chama a MESMA funcao que o jogo chama, com a acao forcada pelo canal oficial. O que
--- ela NAO reproduz continua sendo: a camera, o agendamento entre varias unidades, e o
--- `trackMove` (que so afeta camera). Nada disso muda decisao.
---
--- NAO CONSERTA (e vale saber, porque foi o sintoma que motivou isto): o TakeStance so adota a
--- PrefStance se `uiAP > custo_da_postura + custo_do_ataque` (AIBehaviors.lua:92). Com AP curto a
--- unidade legitimamente NAO agacha -- em jogo tambem. Se o sintoma persistir com esta versao, e
--- regra do jogo, nao artefato do painel.
 ---------------------------------------------------------------------------------------------------
 const.RATOAI = const.RATOAI or {}
 
@@ -2917,34 +2761,6 @@ end
 
 ---------------------------------------------------------------------------------------------------
 -- CLIQUE ESQUERDO NO VAZIO NAO PODE DESMONTAR A SESSAO DE DEBUG
---
--- O OnMouseButtonDown do jogo (IModeAIDebug.lua:93) faz:
---     if button == "L" then
---         if obj ~= selu then            -- obj = nil quando o clique nao pega unidade
---             self.forced_behavior = false
---             self.forced_action = false
---             CreateGameTimeThread(self.Process, self, obj)
---
--- `obj` e nil ao clicar em chao vazio ou sobre o proprio painel -- e nil ~= selu, entao ele
--- DESSELECIONA a unidade, zera o behavior/acao forcados e refaz o think. Na pratica: qualquer
--- clique que nao acerte um boneco joga fora a situacao que se estava montando.
---
--- Isso e fatal para o fluxo de forcar destino: os links vivem no painel, e para clicar neles o
--- mouse sai do tile e passa por chao vazio.
---
--- CONSERTO: so reprocessa quando o clique pega OUTRA unidade. Clique no vazio vira no-op (com
--- "break", que e o mesmo que o vanilla ja devolvia naquele ramo, entao nada mais muda de
--- comportamento). Trocar unidade continua funcionando; o botao direito -- que teleporta a unidade
--- para o tile do cursor -- fica intacto.
---
--- ORIGINAL GUARDADO NA CLASSE, e nao numa global. O resto deste arquivo usa
--- `RATODBG_Orig_X = rawget(_G, "RATODBG_Orig_X") or IModeAIDebug.X`, com a intencao documentada
--- de capturar so uma vez. Essa guarda NAO funciona: `rawget` no _G deste engine nunca acha global
--- de mod (ver o cabecalho de CONSTANTS_AI_source.lua no Rato's AI Overhaul), entao a cada recarga
--- ela recaptura -- e o que era para ser o original passa a ser o wrapper da carga anterior,
--- empilhando uma chamada a mais por recarga. Tabela na classe e lookup de verdade e nao tem esse
--- problema.
----------------------------------------------------------------------------------------------------
 
 IModeAIDebug.ratodbg_orig = IModeAIDebug.ratodbg_orig or {}
 IModeAIDebug.ratodbg_orig.OnMouseButtonDown = IModeAIDebug.ratodbg_orig.OnMouseButtonDown or
@@ -2955,12 +2771,8 @@ function IModeAIDebug:OnMouseButtonDown(pt, button)
         local obj = SelectionMouseObj()
         obj = IsKindOf(obj, "Unit") and obj or nil
         if not obj or obj == self.selected_unit then
-            ---- FIXA O TILE. Antes isto era so no-op, e a lista de posturas do painel era montada
-            ---- a partir do `selected_voxel` (o tile sob o cursor). Isso nao funciona: o painel so
-            ---- remonta a lista quando RENDERIZA, e para clicar num link o mouse precisa sair do
-            ---- tile -- entao o indice do link apontava para a lista de outro momento, e o destino
-            ---- escolhido nao era o que se tinha clicado.
-            ---- Com o tile FIXADO no clique, a lista para de depender de onde o mouse esta.
+            ---- FIXA O TILE. 
+
             local pos = GetCursorPassSlab()
             if pos then
                 self.ratodbg_pinned_voxel = point_pack(pos)

@@ -11,4 +11,4 @@ end
 
 
 
-OnMsg.DataLoaded = rebuild()	
+OnMsg.DataLoaded = not FirstLoad and rebuild()	

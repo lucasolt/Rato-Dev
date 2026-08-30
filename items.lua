@@ -93,8 +93,4 @@ return {
 		'name', "AI_THINK_provisorio_teste_reload",
 		'CodeFileName', "Code/AI_THINK_provisorio_teste_reload.lua",
 	}),
-	PlaceObj('ModItemCode', {
-		'name', "get_range_provisorio",
-		'CodeFileName', "Code/get_range_provisorio.lua",
-	}),
 }
