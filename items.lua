@@ -77,6 +77,10 @@ return {
 		'name', "Script3",
 		'CodeFileName', "Code/Script3.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "Script2",
+		'CodeFileName', "Code/Script2.lua",
+	}),
 	PlaceObj('ModItemFolder', {
 		'name', "IA Debug Tools",
 	}, {
