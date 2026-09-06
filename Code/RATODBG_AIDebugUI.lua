@@ -1509,11 +1509,10 @@ end
 ---- normalizacao da AIPolicyThreatExposure aplicada a uma soma de rampas qualquer:
 ---- e a mesma linha do EvalDest dela, incluindo clamp de saturacao e Weight
 local function ThreatNormalize(pol, soma)
-    if not soma or soma <= 0 then
-        return 0
-    end
-    local sat = pol:GetSaturation()
-    return MulDivRound(MulDivRound(pol.Penalty, Min(soma, sat), sat), pol.Weight or 100, 100)
+    ---- `Normalize` e o metodo da PROPRIA policy -- mesma linha do EvalDest, mesmo clamp de
+    ---- saturacao. So o Weight fica aqui, porque quem multiplica por ele e o AIScoreDest e
+    ---- o EvalDest sozinho ainda nao o aplicou.
+    return MulDivRound(pol:Normalize(soma), pol.Weight or 100, 100)
 end
 
 ---- Devolve: totais {bruta, cancelada, liquida} e as tabelas por inimigo de cada um.
@@ -1531,85 +1530,35 @@ local function Decompose(threat_pol, cover_pol, context, dest, grid_voxel)
     ---- regime de UMA policy
     -----------------------------------------------------------------------------------
     if threat_pol and threat_pol.CoverCancels then
-        local _, _, _, stance_idx = stance_pos_unpack(dest)
-        local stance = StancesList[stance_idx]
-        local plateau = (threat_pol.PlateauTiles or 0) * const.SlabSizeX
-
-        ---------------------------------------------------------------------------
-        ---- Estes tres eram OMITIDOS aqui e aplicados no EvalDest, entao o painel e a
-        ---- policy davam numeros diferentes para o mesmo tile -- exatamente o que o
-        ---- cabecalho desta secao existe para impedir. `curve` ficou de fora desde
-        ---- sempre; `ThreatEffectMods` e o custo de preparo entraram depois e ninguem
-        ---- propagou. Resolvido uma vez, fora do laco.
-        ---------------------------------------------------------------------------
-        local curve = Clamp(threat_pol.FalloffCurve or 0, 0, 100)
-        local setup = threat_pol.SetupBias and (const.RATOAI.ThreatSetupBias ~= false)
-        local ready_pct, costly_pct
-        if setup then
-            ready_pct = (threat_pol.SetupReadyPct or 0) > 0 and threat_pol.SetupReadyPct or
-                            (const.RATOAI.ThreatSetupReady or 100)
-            costly_pct = (threat_pol.SetupCostlyPct or 0) > 0 and threat_pol.SetupCostlyPct or
-                             (const.RATOAI.ThreatSetupCostly or 100)
-            if ready_pct == 100 and costly_pct == 100 then
-                setup = false
-            end
-        end
-
-        ---- BUGFIX (B49): teto de um inimigo so. Sai da propria policy para os dois lados
-        ---- nunca discordarem -- e o mesmo motivo de `ThreatNormalize` chamar GetSaturation.
-        local ceiling = threat_pol:GetEnemyCeiling()
-
+        -------------------------------------------------------------------------------
+        ---- NUCLEO COMPARTILHADO -- nao reintroduza conta local aqui.
+        ----
+        ---- `DestParams` e `EnemyContribution` sao os MESMOS metodos que o EvalDest chama
+        ---- (Rato's AI Overhaul/Code/AIPOLICYPOS_ThreatExposure.lua). Este bloco ja
+        ---- reimplementou a conta uma vez e desincronizou QUATRO vezes seguidas -- o
+        ---- `FalloffCurve` ficou de fora desde sempre, depois entraram o
+        ---- `ThreatEffectMods`, o custo de preparo e por fim o `SetupCurveSpread`, cada um
+        ---- patchado aqui bem depois de o painel ja estar pintando um numero que a policy
+        ---- nao calculava. Agora ha um caminho de calculo so.
+        ----
+        ---- O portao de LOS POR INIMIGO (BUGFIX B50) vem de graca junto, dentro do
+        ---- EnemyContribution: quem nao ve o tile contribui 0 nos dois lados.
+        -------------------------------------------------------------------------------
+        local p = threat_pol:DestParams(dest)
         local bruta, cancelada, liquida = {}, {}, {}
         local sb, sl = 0, 0
         for _, enemy in ipairs(context.enemies or empty_table) do
-            local alive = IsValid(enemy) and not (enemy:IsDead() or enemy:IsDowned())
-            ---- DEBUG (D8): mesmo filtro de isolamento que a policy usa. Sem ele o painel
-            ---- mostraria ameaca de quem o filtro tirou da conta.
-            if alive and RATOAI_ThreatCounts(enemy) and
-                PolicySeesEnemy(threat_pol, context, enemy) then
-                local att_pos = InflValidZ(enemy:GetPos())
-                if IsValidPos(att_pos) then
-                    local range, is_firearm = threat_pol:GetEnemyRange(enemy)
-                    local d = att_pos:Dist(target_pos)
-                    local ramp = RATOAI_ThreatRamp(d, range, plateau, curve)
-                    local unc = 100
-                    if ramp > 0 then
-                        ---- `d` explicito: o GetUncovered precisa da distancia para a
-                        ---- rampa de CoverNearTiles e, sem receber, recalcula a mesma
-                        ---- Dist() que a linha acima ja pagou
-                        unc = threat_pol:GetUncovered(att_pos, target_pos, stance, is_firearm, d)
-                    end
-
-                    ---- Os fatores por inimigo (status effect, custo de preparo) escalam a
-                    ---- ameaca DELE, e por isso entram nos DOIS lados -- bruta e liquida.
-                    ---- Aplicar so na liquida jogaria o efeito deles dentro de `cancelada`,
-                    ---- que quer dizer "o que a COBERTURA tirou" e passaria a mentir.
-                    local mods = RATOAI_ThreatEnemyFactor(enemy, context)
-                    if setup then
-                        mods = MulDivRound(mods, RATOAI_SetupFactor(enemy, context, target_pos,
-                                                                    ready_pct, costly_pct), 100)
-                    end
-
-                    local raw = (mods == 100) and ramp or MulDivRound(ramp, mods, 100)
-                    local net = MulDivRound(raw, unc, 100)
-                    ---- BUGFIX (B49): mesmo clamp por inimigo que o EvalDest aplica. Sem
-                    ---- ele o painel mostraria um inimigo valendo mais que o teto e a soma
-                    ---- das linhas nao bateria com o numero do slab.
-                    if raw > ceiling then
-                        raw = ceiling
-                    end
-                    if net > ceiling then
-                        net = ceiling
-                    end
-                    bruta[enemy], liquida[enemy], cancelada[enemy] = raw, net, raw - net
-                    sb, sl = sb + raw, sl + net
-                end
+            local raw, net = threat_pol:EnemyContribution(context, enemy, dest, target_pos, p)
+            if raw > 0 then
+                bruta[enemy], liquida[enemy], cancelada[enemy] = raw, net, raw - net
+                sb, sl = sb + raw, sl + net
             end
         end
 
-        ---- portao de LOS: a policy zera o tile inteiro, entao a decomposicao dele
+        ---- portao agregado do motor: a policy zera o tile inteiro, entao a decomposicao dele
         ---- tambem e zero -- senao o mapa mostraria ameaca num tile que a policy ignora
-        if threat_pol.RequireLOS and g_AIDestEnemyLOSCache and g_AIDestEnemyLOSCache[dest] == false then
+        if threat_pol.RequireLOS and g_AIDestEnemyLOSCache and g_AIDestEnemyLOSCache[dest] ==
+            false then
             return {bruta = 0, cancelada = 0, liquida = 0}, {}, {}, {}
         end
 
