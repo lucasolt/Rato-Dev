@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 653,
+	'version', 654,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -31,7 +31,7 @@ return PlaceObj('ModDef', {
 		"Code/AI_THINK_provisorio_teste_reload.lua",
 	},
 	'default_options', {},
-	'saved', 1788231677,
-	'code_hash', -3136779502252518376,
+	'saved', 1788556187,
+	'code_hash', 1057083571970346591,
 	'affected_resources', {},
 })
