@@ -102,6 +102,43 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
 		end
     end
 
+    -- aCTH fires a real trajectory: the part hit is not the part aimed at. off-part = soft stray
+    do
+        local function collect_hit_part(shots)
+            local t = {}
+            for i, shot in ipairs(shots or empty_table) do
+                local part, off
+                for _, hit in ipairs(shot.hits or empty_table) do
+                    if hit.obj == target then
+                        part, off = hit.spot_group, hit.rat_offpart
+                        break
+                    end
+                end
+                t[i] = shot.miss and "miss" or
+                           ((part or "?") .. (off and " (off-part)" or ""))
+            end
+            return t
+        end
+        local per_shot
+        if results.attacks then
+            local parts = {}
+            for ai, attack in ipairs(results.attacks) do
+                local t = collect_hit_part(attack.shots)
+                if #t > 0 then
+                    parts[#parts + 1] = "w" .. ai .. ": " .. table.concat(t, " | ")
+                end
+            end
+            per_shot = #parts > 0 and table.concat(parts, "   ") or nil
+        else
+            local t = collect_hit_part(results.shots)
+            per_shot = #t > 0 and table.concat(t, " | ") or nil
+        end
+        if per_shot then
+            info['Aimed part'] = attack_args and attack_args.target_spot_group or "Torso (default)"
+            info['Hit part per shot'] = per_shot
+        end
+    end
+
     for i, mod in ipairs(results.chance_to_hit_modifiers) do
         local id = mod.id or "Stat"
         if id == "HipshotPenalty" then
