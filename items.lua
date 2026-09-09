@@ -81,6 +81,10 @@ return {
 		'name', "Script2",
 		'CodeFileName', "Code/Script2.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "FindComponent",
+		'CodeFileName', "Code/FindComponent.lua",
+	}),
 	PlaceObj('ModItemFolder', {
 		'name', "IA Debug Tools",
 	}, {
