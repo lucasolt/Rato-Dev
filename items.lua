@@ -54,6 +54,10 @@ return {
 			'name', "CheckIfChangedPatchingMethod",
 			'CodeFileName', "Code/CheckIfChangedPatchingMethod.lua",
 		}),
+		PlaceObj('ModItemCode', {
+			'name', "ReapplyComps",
+			'CodeFileName', "Code/ReapplyComps.lua",
+		}),
 		}),
 	PlaceObj('ModItemCode', {
 		'name', "used_comps_brute_TOG",

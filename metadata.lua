@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 661,
+	'version', 664,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -20,6 +20,7 @@ return PlaceObj('ModDef', {
 		"Code/PrintAttack.lua",
 		"Code/FirearmExec_debug.lua",
 		"Code/CheckIfChangedPatchingMethod.lua",
+		"Code/ReapplyComps.lua",
 		"Code/used_comps_brute_TOG.lua",
 		"Code/Script1.lua",
 		"Code/RATOAI_WORKSHOP.lua",
@@ -32,7 +33,7 @@ return PlaceObj('ModDef', {
 		"Code/AI_THINK_provisorio_teste_reload.lua",
 	},
 	'default_options', {},
-	'saved', 1788855339,
-	'code_hash', -2095855878276792593,
+	'saved', 1789238891,
+	'code_hash', 185344151413184136,
 	'affected_resources', {},
 })

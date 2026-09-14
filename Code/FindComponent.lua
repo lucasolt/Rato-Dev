@@ -8,7 +8,8 @@ function get_components_with(effect)
 		for i, eff in ipairs(k.ModificationEffects) do
 			if eff == effect then
 				found_comp[k.Slot] = found_comp[k.Slot] or {}
-				table.insert(found_comp[k.Slot], v)
+				found_comp[k.Slot][v] = k
+				--table.insert(found_comp[k.Slot], v)
 			end
 		end
 	end
