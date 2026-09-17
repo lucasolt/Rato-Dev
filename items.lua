@@ -101,8 +101,4 @@ return {
 			'CodeFileName', "Code/RATOTEL_AITelemetry.lua",
 		}),
 		}),
-	PlaceObj('ModItemCode', {
-		'name', "AI_THINK_provisorio_teste_reload",
-		'CodeFileName', "Code/AI_THINK_provisorio_teste_reload.lua",
-	}),
 }
