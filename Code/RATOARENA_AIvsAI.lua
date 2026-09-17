@@ -421,6 +421,153 @@ local function UnitFamily(unit)
     return id:match("^%u%l+") or ""
 end
 
+---- shortest matching class id of that family, base version before _Stronger/_Elite
+local function PickClass(family, archetype)
+    local best
+    for id in sorted_pairs(UnitDataDefs) do
+        if id:starts_with(family) and ClassArchetype(id) == archetype and IsSpawnable(id, archetype) then
+            if not best or #id < #best then
+                best = id
+            end
+        end
+    end
+    return best
+end
+
+local spawn_seq = 0
+
+local function SpawnFor(team, side, class_id)
+    local anchor = team.units[1 + (spawn_seq % Max(1, #team.units))]
+    local pos = anchor and (GetPassSlab(anchor) or anchor:GetPos())
+    spawn_seq = spawn_seq + 1
+    local free = pos and DbgFindFreePassPositions(pos, 1, 12, xxhash(pos, spawn_seq))
+    if not free or not free[1] then
+        return
+    end
+    local unit = SpawnUnit(class_id, string.format("RatoArena_%s_%d", class_id, spawn_seq), free[1])
+    if unit then
+        unit:SetSide(side)
+        unit.pending_aware_state = "aware"
+    end
+    return unit
+end
+
+local function DespawnOne(team, archetype)
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() and ClassArchetype(u.unitdatadef_id or u.class) == archetype then
+            u:Despawn()
+            return true
+        end
+    end
+end
+
+local function Census(team)
+    local counts = {}
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() then
+            local a = ClassArchetype(u.unitdatadef_id or u.class)
+            counts[a] = (counts[a] or 0) + 1
+        end
+    end
+    return counts
+end
+
+local function CensusText(counts)
+    local o = {}
+    for a, n in sorted_pairs(counts) do
+        o[#o + 1] = a .. ":" .. n
+    end
+    return table.concat(o, " ")
+end
+
+---- spec: size, pct = {[archetype] = percent}, utility = {archetypes sharing the remainder},
+---- family, dry. Despawns what is over target and spawns what is missing.
+function RatoArena_Mix(side, spec)
+    side = side or "enemy1"
+    spec = spec or {}
+    local team = table.find_value(g_Teams or empty_table, "side", side)
+    if not team or #(team.units or empty_table) == 0 then
+        return "no units on side " .. side
+    end
+
+    local counts = Census(team)
+    local size = spec.size or 0
+    if size == 0 then
+        for _, n in pairs(counts) do
+            size = size + n
+        end
+    end
+    local family = spec.family
+    if not family then
+        local by_family = {}
+        for _, u in ipairs(team.units) do
+            local f = UnitFamily(u)
+            by_family[f] = (by_family[f] or 0) + 1
+            if not family or by_family[f] > by_family[family] then
+                family = f
+            end
+        end
+    end
+
+    ---- percentages first, then the leftover budget is split evenly over the utility list
+    local targets, used = {}, 0
+    for a, pct in sorted_pairs(spec.pct or empty_table) do
+        targets[a] = MulDivRound(size, pct, 100)
+        used = used + targets[a]
+    end
+    ---- round-robin instead of dividing: no integer-division surprise, remainder lands on the first entries
+    local utility = spec.utility or empty_table
+    local left = Max(0, size - used)
+    for i = 1, (#utility > 0 and left or 0) do
+        local a = utility[1 + ((i - 1) % #utility)]
+        targets[a] = (targets[a] or 0) + 1
+    end
+
+    local plan = {}
+    local seen = {}
+    for a in sorted_pairs(targets) do
+        seen[a] = true
+        plan[#plan + 1] = { a = a, delta = targets[a] - (counts[a] or 0) }
+    end
+    for a in sorted_pairs(counts) do
+        if not seen[a] then
+            plan[#plan + 1] = { a = a, delta = -counts[a] }
+        end
+    end
+
+    if spec.dry then
+        local o = {}
+        for _, p in ipairs(plan) do
+            if p.delta ~= 0 then
+                o[#o + 1] = string.format("%s %+d", p.a, p.delta)
+            end
+        end
+        return string.format("%s size=%d family=%s now [%s] plan: %s",
+            side, size, family, CensusText(counts), #o > 0 and table.concat(o, " ") or "nothing to do")
+    end
+
+    local done = {}
+    for _, p in ipairs(plan) do
+        if p.delta < 0 then
+            for _ = 1, -p.delta do
+                if DespawnOne(team, p.a) then
+                    done[#done + 1] = p.a .. "-1"
+                end
+            end
+        elseif p.delta > 0 then
+            local class_id = PickClass(family, p.a)
+            for _ = 1, p.delta do
+                if class_id and SpawnFor(team, side, class_id) then
+                    done[#done + 1] = class_id .. "+1"
+                end
+            end
+        end
+    end
+    AlertPendingUnits()
+    return string.format("%s %s -- now [%s] -- SAVE the game",
+        side, #done > 0 and table.concat(done, " ") or "no change", CensusText(Census(team)))
+end
+
 ---- opts: family (default: the one already fighting), remove (despawn that many of the most common
 ---- archetype, to keep team size), dry (only report)
 function RatoArena_Compose(side, opts)
@@ -431,84 +578,62 @@ function RatoArena_Compose(side, opts)
         return "no units on side " .. side
     end
 
-    local family, present, counts = opts.family, {}, {}
-    for _, u in ipairs(team.units) do
-        if not u:IsDead() then
-            local a = ClassArchetype(u.unitdatadef_id or u.class)
-            present[a] = (present[a] or 0) + 1
+    local counts = Census(team)
+    local family = opts.family
+    if not family then
+        local by_family = {}
+        for _, u in ipairs(team.units) do
             local f = UnitFamily(u)
-            counts[f] = (counts[f] or 0) + 1
-            if not family or (counts[f] > (counts[family] or 0)) then
-                family = opts.family or f
-            end
-        end
-    end
-
-    ---- one candidate class per missing archetype, base version preferred over _Stronger/_Elite
-    local wanted = {}
-    for id in sorted_pairs(UnitDataDefs) do
-        if id:starts_with(family) then
-            local a = ClassArchetype(id)
-            if not present[a] and IsSpawnable(id, a) then
-                local cur = wanted[a]
-                if not cur or #id < #cur then
-                    wanted[a] = id
-                end
+            by_family[f] = (by_family[f] or 0) + 1
+            if not family or by_family[f] > by_family[family] then
+                family = f
             end
         end
     end
 
     local add = {}
-    for a, id in sorted_pairs(wanted) do
-        add[#add + 1] = { archetype = a, id = id }
+    for id in sorted_pairs(UnitDataDefs) do
+        if id:starts_with(family) then
+            local a = ClassArchetype(id)
+            if not counts[a] and IsSpawnable(id, a) and (not add[a] or #id < #add[a]) then
+                add[a] = id
+            end
+        end
     end
     if opts.dry then
         local o = {}
-        for _, x in ipairs(add) do
-            o[#o + 1] = x.archetype .. "=" .. x.id
+        for a, id in sorted_pairs(add) do
+            o[#o + 1] = a .. "=" .. id
         end
-        return string.format("%s family=%s missing %d: %s", side, family, #add, table.concat(o, " "))
+        return string.format("%s family=%s now [%s] missing %d: %s",
+            side, family, CensusText(counts), #o, table.concat(o, " "))
     end
 
-    ---- despawn first: the free positions found below should account for the ones leaving
+    ---- despawn first, so the free positions account for the ones leaving
     local removed = 0
     for _ = 1, opts.remove or 0 do
         local top, top_n
-        for a, n in sorted_pairs(present) do
+        for a, n in sorted_pairs(counts) do
             if not top_n or n > top_n then
                 top, top_n = a, n
             end
         end
-        for _, u in ipairs(team.units) do
-            if not u:IsDead() and ClassArchetype(u.unitdatadef_id or u.class) == top then
-                present[top] = present[top] - 1
-                removed = removed + 1
-                u:Despawn()
-                break
-            end
+        if top and DespawnOne(team, top) then
+            counts[top] = counts[top] - 1
+            removed = removed + 1
         end
     end
 
     local spawned = {}
-    for i, x in ipairs(add) do
-        local anchor = team.units[1 + (i % Max(1, #team.units))]
-        local pos = anchor and (GetPassSlab(anchor) or anchor:GetPos())
-        local free = pos and DbgFindFreePassPositions(pos, 1, 12, xxhash(pos, i))
-        if free and free[1] then
-            local unit = SpawnUnit(x.id, string.format("RatoArena_%s_%d", x.id, i), free[1])
-            if unit then
-                unit:SetSide(side)
-                unit.pending_aware_state = "aware"
-                spawned[#spawned + 1] = x.archetype .. "=" .. x.id
-            end
+    for a, id in sorted_pairs(add) do
+        if SpawnFor(team, side, id) then
+            spawned[#spawned + 1] = a .. "=" .. id
         end
     end
-    if #spawned > 0 then
-        AlertPendingUnits()
-    end
+    AlertPendingUnits()
 
-    return string.format("%s family=%s removed=%d spawned %d: %s -- now SAVE the game",
-        side, family, removed, #spawned, table.concat(spawned, " "))
+    return string.format("%s family=%s removed=%d spawned %d: %s -- now [%s] -- SAVE the game",
+        side, family, removed, #spawned, table.concat(spawned, " "), CensusText(Census(team)))
 end
 
 ---- archetype census of a side, as declared by unit data (what composition actually is)
