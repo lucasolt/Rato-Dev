@@ -105,4 +105,8 @@ return {
 		'name', "ZulibReloadFix",
 		'CodeFileName', "Code/ZulibReloadFix.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "RATOARENA_AIvsAI",
+		'CodeFileName', "Code/RATOARENA_AIvsAI.lua",
+	}),
 }

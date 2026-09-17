@@ -1,0 +1,414 @@
+---------------------------------------------------------------------------------------------------
+-- Rato Dev -- AI vs AI arena
+--
+-- RatoArena_Start hands every UI team to the AI for the current combat. Sides are untouched,
+-- so Combat:ShouldEndCombat (needs a live player1/player2 team) still ends the match normally.
+-- Each side may run its own archetype weights ("genome"): a flat {path = number} table per
+-- archetype, applied through proxies so the shared presets are never written.
+--
+-- Driven from Rato's AI Overhaul: python tools/arena.py (DAP). Results also go to the game log
+-- as [RATOARENA_RESULT] lines.
+---------------------------------------------------------------------------------------------------
+
+RATOARENA = {
+    active = false,
+    match = false,
+    genomes = {}, ---- [side] = {[archetype_id] = {[path] = value}}
+    variants = {}, ---- [side] = {[archetype_id] = archetype or proxy}
+    applied = {}, ---- [side] = {[archetype_id] = {[path] = true}}
+    results = {},
+    out = {}, ---- [key] = string, paged out by RatoArena_Read (DAP caps a result at ~512 chars)
+}
+
+---- identity-compared against Archetypes.EmplacementGunner in CombatCamera.lua
+local NEVER_PROXY = { EmplacementGunner = true }
+
+---------------------------------------------------------------------------------------------------
+-- output paging
+---------------------------------------------------------------------------------------------------
+
+function RatoArena_Put(key, str)
+    RATOARENA.out[key] = str
+    return #str
+end
+
+function RatoArena_Read(key, offset, len)
+    local s = RATOARENA.out[key]
+    return s and s:sub(offset + 1, offset + len) or ""
+end
+
+local function PutJSON(key, value)
+    local err, json = LuaToJSON(value)
+    if err or not json then
+        return -1
+    end
+    return RatoArena_Put(key, tostring(json))
+end
+
+---------------------------------------------------------------------------------------------------
+-- genome paths: "<list>/<key>#<n>/.../<prop>", e.g. Behaviors/StandardAI#1/EndTurnPolicies/AIPolicyDealDamage#2/Weight
+---------------------------------------------------------------------------------------------------
+
+local function ChildKey(obj, counts)
+    local name = obj.class
+    local bias = obj.BiasId
+    if IsKindOf(obj, "AIBehavior") and type(bias) == "string" and bias ~= "" then
+        name = bias
+    end
+    counts[name] = (counts[name] or 0) + 1
+    return name .. "#" .. counts[name]
+end
+
+local function WalkSpace(obj, path, out, depth)
+    for _, prop in ipairs(obj:GetProperties()) do
+        local id, v = prop.id, obj[prop.id]
+        if prop.editor == "number" and type(v) == "number" and not prop.read_only then
+            out[#out + 1] = {
+                p = path .. id,
+                v = v,
+                min = type(prop.min) == "number" and prop.min or nil,
+                max = type(prop.max) == "number" and prop.max or nil,
+            }
+        elseif prop.editor == "nested_list" and type(v) == "table" and depth < 4 then
+            local counts = {}
+            for _, child in ipairs(v) do
+                WalkSpace(child, path .. id .. "/" .. ChildKey(child, counts) .. "/", out, depth + 1)
+            end
+        end
+    end
+end
+
+---- Returns the length of the JSON written to out["space:<id>"].
+function RatoArena_Space(archetype_id)
+    local arch = Archetypes[archetype_id]
+    if not arch then
+        return -1
+    end
+    local out = {}
+    WalkSpace(arch, "", out, 0)
+    return PutJSON("space:" .. archetype_id, out)
+end
+
+---- Returns obj itself when no gene lives under path, so unmutated subtrees stay shared.
+local function BuildVariant(obj, path, genes, touched, depth)
+    local proxy
+    for _, prop in ipairs(obj:GetProperties()) do
+        local id = prop.id
+        if prop.editor == "number" then
+            local v = genes[path .. id]
+            if v ~= nil then
+                proxy = proxy or setmetatable({}, { __index = obj })
+                proxy[id] = v
+                touched[path .. id] = true
+            end
+        elseif prop.editor == "nested_list" and type(obj[id]) == "table" and depth < 4 then
+            local new, counts, changed = {}, {}, false
+            for i, child in ipairs(obj[id]) do
+                local c = BuildVariant(child, path .. id .. "/" .. ChildKey(child, counts) .. "/", genes, touched, depth + 1)
+                new[i] = c
+                changed = changed or c ~= child
+            end
+            if changed then
+                proxy = proxy or setmetatable({}, { __index = obj })
+                proxy[id] = new
+            end
+        end
+    end
+    return proxy or obj
+end
+
+---- genome = {[archetype_id] = {[path] = number}}; false clears the side. Returns unknown paths joined by ";".
+function RatoArena_SetGenome(side, genome)
+    RATOARENA.genomes[side] = genome or nil
+    RATOARENA.variants[side] = nil
+    RATOARENA.applied[side] = {}
+    local unknown = {}
+    for arch_id, genes in sorted_pairs(genome or empty_table) do
+        local arch = Archetypes[arch_id]
+        if not arch or NEVER_PROXY[arch_id] then
+            unknown[#unknown + 1] = arch_id
+        else
+            local touched = {}
+            BuildVariant(arch, "", genes, touched, 0)
+            RATOARENA.applied[side][arch_id] = touched
+            for path in sorted_pairs(genes) do
+                if not touched[path] then
+                    unknown[#unknown + 1] = arch_id .. ":" .. path
+                end
+            end
+        end
+    end
+    return table.concat(unknown, ";")
+end
+
+local function Variant(unit, arch)
+    if not RATOARENA.active or not arch then
+        return arch
+    end
+    local side = unit.team and unit.team.side
+    local genome = side and RATOARENA.genomes[side]
+    local genes = genome and genome[arch.id]
+    if not genes or NEVER_PROXY[arch.id] then
+        return arch
+    end
+    local cache = RATOARENA.variants[side]
+    if not cache then
+        cache = {}
+        RATOARENA.variants[side] = cache
+    end
+    local v = cache[arch.id]
+    if not v then
+        v = BuildVariant(arch, "", genes, {}, 0)
+        cache[arch.id] = v
+    end
+    return v
+end
+
+local GetArchetype_orig = Unit.GetArchetype
+function Unit:GetArchetype()
+    return Variant(self, GetArchetype_orig(self))
+end
+
+local GetCurrentArchetype_orig = Unit.GetCurrentArchetype
+function Unit:GetCurrentArchetype()
+    return Variant(self, GetCurrentArchetype_orig(self))
+end
+
+---------------------------------------------------------------------------------------------------
+-- turn flow
+---------------------------------------------------------------------------------------------------
+
+---- Side-based in vanilla: without this an AI-controlled player1 team takes the human branch and never gets AITurn.
+local IsNetPlayerTurn_orig = IsNetPlayerTurn
+function IsNetPlayerTurn(id)
+    if RATOARENA.active then
+        local team = g_Teams and g_Teams[g_CurrentTeam]
+        if team and team.control == "AI" then
+            return false
+        end
+    end
+    return IsNetPlayerTurn_orig(id)
+end
+
+local function SideStats(m, side)
+    local s = m.sides[side]
+    if not s then
+        s = { dealt = 0, friendly = 0, kills = 0, attacks = 0 }
+        m.sides[side] = s
+    end
+    return s
+end
+
+---- opts: label, max_turns (default 15), time_factor
+function RatoArena_Start(opts)
+    opts = opts or {}
+    if not g_Combat then
+        return "no combat"
+    end
+    if RATOARENA.active then
+        return "already active"
+    end
+    local m = {
+        label = opts.label or "",
+        max_turns = opts.max_turns or 15,
+        start_turn = g_Combat.current_turn,
+        start_time = GameTime(),
+        start_ticks = GetPreciseTicks(),
+        sides = {},
+        units = {},
+        controls = {},
+    }
+    for _, team in ipairs(g_Teams) do
+        if team.side ~= "neutral" then
+            for _, u in ipairs(team.units) do
+                if not u:IsDead() then
+                    SideStats(m, team.side)
+                    m.units[#m.units + 1] = { unit = u, side = team.side, hp0 = u.HitPoints, dealt = 0, kills = 0 }
+                end
+            end
+        end
+    end
+
+    local current = g_Teams[g_CurrentTeam]
+    for _, team in ipairs(g_Teams) do
+        if team.control == "UI" then
+            m.controls[team] = team.control
+            ---- NetSyncEvents.EndTurn ignores a non-UI team, so the pending human turn is ended by hand
+            if team == current then
+                g_Combat.player_end_turn[netUniqueId] = true
+            end
+            team.control = "AI"
+        end
+    end
+    if opts.time_factor then
+        m.time_factor_prev = GetTimeFactor()
+        SetTimeFactor(opts.time_factor)
+    end
+
+    RATOARENA.variants = {}
+    RATOARENA.match = m
+    RATOARENA.active = true
+    if current and m.controls[current] then
+        g_Combat:CheckEndTurn()
+    end
+    return "ok"
+end
+
+local function UnitRow(m, unit)
+    for _, row in ipairs(m.units) do
+        if row.unit == unit then
+            return row
+        end
+    end
+end
+
+local function Finish(reason)
+    local m = RATOARENA.match
+    if not m or m.finished then
+        return
+    end
+    m.finished = true
+    RATOARENA.active = false
+    for team, control in pairs(m.controls) do
+        team.control = control
+    end
+    if m.time_factor_prev then
+        SetTimeFactor(m.time_factor_prev)
+    end
+
+    local standing = {}
+    local units = {}
+    for _, row in ipairs(m.units) do
+        local u, s = row.unit, m.sides[row.side]
+        local hp = u:IsDead() and 0 or u.HitPoints
+        s.units = (s.units or 0) + 1
+        s.hp0 = (s.hp0 or 0) + row.hp0
+        s.hp = (s.hp or 0) + hp
+        if u:IsDead() then
+            s.dead = (s.dead or 0) + 1
+        elseif u:IsIncapacitated() then
+            s.down = (s.down or 0) + 1
+        else
+            s.alive = (s.alive or 0) + 1
+            standing[row.side] = true
+        end
+        units[#units + 1] = {
+            id = u.session_id,
+            side = row.side,
+            arch = GetArchetype_orig(u).id,
+            hp0 = row.hp0,
+            hp = hp,
+            dealt = row.dealt,
+            kills = row.kills,
+        }
+    end
+    local winner = "draw"
+    local standing_sides = table.keys(standing, true)
+    if #standing_sides == 1 then
+        winner = standing_sides[1]
+    end
+
+    local genomes = {}
+    for side, archs in pairs(RATOARENA.applied) do
+        local n = 0
+        for _, touched in pairs(archs) do
+            n = n + table.count(touched)
+        end
+        genomes[side] = n
+    end
+
+    local rec = {
+        label = m.label,
+        reason = reason,
+        winner = winner,
+        turns = (g_Combat and g_Combat.current_turn or m.last_turn or m.start_turn) - m.start_turn + 1,
+        game_ms = GameTime() - m.start_time,
+        real_ms = GetPreciseTicks() - m.start_ticks,
+        sector = gv_CurrentSectorId,
+        sides = m.sides,
+        units = units,
+        genes = genomes,
+    }
+    m.result = rec
+    RATOARENA.results[#RATOARENA.results + 1] = rec
+    local err, json = LuaToJSON(rec)
+    if not err and json then
+        local line = tostring(json)
+        RatoArena_Put("last_result", line)
+        DebugPrint("[RATOARENA_RESULT] " .. line .. "\n")
+    end
+end
+
+---- Ends the match now (e.g. driver timeout); control goes back to the player.
+function RatoArena_Stop(reason)
+    Finish(reason or "stopped")
+    return "ok"
+end
+
+---- Short poll string for the driver: "idle", "running turn=N team=SIDE" or "done <reason> <winner> <json length>".
+function RatoArena_Status()
+    local m = RATOARENA.match
+    if not m then
+        return "idle"
+    end
+    if m.result then
+        return string.format("done %s %s %d", m.result.reason, m.result.winner, #(RATOARENA.out.last_result or ""))
+    end
+    local team = g_Teams and g_Teams[g_CurrentTeam]
+    return string.format("running turn=%s team=%s", tostring(g_Combat and g_Combat.current_turn), tostring(team and team.side))
+end
+
+function OnMsg.DamageDone(attacker, target, dmg, hit_descr)
+    local m = RATOARENA.active and RATOARENA.match
+    if not m or not IsKindOf(attacker, "Unit") or not IsKindOf(target, "Unit") or not attacker.team then
+        return
+    end
+    local s = SideStats(m, attacker.team.side)
+    if target.team and not attacker.team:IsEnemySide(target.team) then
+        s.friendly = s.friendly + (dmg or 0)
+        return
+    end
+    s.dealt = s.dealt + (dmg or 0)
+    local row = UnitRow(m, attacker)
+    if row then
+        row.dealt = row.dealt + (dmg or 0)
+    end
+end
+
+function OnMsg.UnitDied(unit, killer)
+    local m = RATOARENA.active and RATOARENA.match
+    if not m or not IsKindOf(killer, "Unit") or not killer.team or not unit.team then
+        return
+    end
+    if killer.team:IsEnemySide(unit.team) then
+        local s = SideStats(m, killer.team.side)
+        s.kills = s.kills + 1
+        local row = UnitRow(m, killer)
+        if row then
+            row.kills = row.kills + 1
+        end
+    end
+end
+
+function OnMsg.OnAttack(attacker, action, target, results, attack_args)
+    local m = RATOARENA.active and RATOARENA.match
+    if m and IsKindOf(attacker, "Unit") and attacker.team then
+        local s = SideStats(m, attacker.team.side)
+        s.attacks = s.attacks + 1
+    end
+end
+
+function OnMsg.NewCombatTurn(turn)
+    local m = RATOARENA.active and RATOARENA.match
+    if m and turn - m.start_turn >= m.max_turns then
+        Finish("turn_cap")
+    end
+end
+
+function OnMsg.CombatEnd()
+    if RATOARENA.active then
+        local m = RATOARENA.match
+        m.last_turn = g_Combat and g_Combat.current_turn
+        Finish("combat_end")
+    end
+end
