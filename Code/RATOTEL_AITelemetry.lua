@@ -442,6 +442,11 @@ local function Breakdown(context, policies, dest)
     if not dest or not policies or #policies == 0 then
         return nil
     end
+    ---- a corrupt pack (seen: x 355800, z 649600 on a 307200 map) trips the C assert in point_pack
+    local x, y = stance_pos_unpack(dest)
+    if not terrain.IsPointInBounds(point(x, y)) then
+        return {bad_dest = true}
+    end
     local unit = context.unit
     local filtered = table.ifilter(policies, function(idx, p)
         return p:MatchUnit(unit)
