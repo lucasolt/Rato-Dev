@@ -2,10 +2,10 @@
 -- Rato Dev -- telemetria de decisao da IA
 --
 -- Grava, por unidade e por turno, o que a IA decidiu E os numeros que sustentaram a
--- decisao, uma linha JSON por registro, em `RATOTEL_Records` (memoria). Para disco, pela sonda DAP:
+-- decisao, uma linha JSON por registro, no log do jogo (prefixo `[RATOTEL_REC]`) e em
+-- `RATOTEL_Records` (memoria). Para extrair do log, no Rato's AI Overhaul:
 --
---     python tools/dap_probe.py -f tools/dump_telemetry.lua   (no Rato's AI Overhaul)
---     -> AppData/RatoTelemetry/ai_telemetry.jsonl
+--     python tools/extract_telemetry.py          -> RatoTelemetry/ai_telemetry.jsonl
 --
 -- Existe porque `unit.ai_context` e apagado no fim do turno
 -- (CombatCamera.lua:1362, `unit.ai_context = nil` para toda unidade jogada), entao
@@ -96,8 +96,11 @@ local function Emit(rec)
         Report("LuaToJSON(" .. tostring(rec.ev) .. ")", err)
         return
     end
+    local line = tostring(json)
+    ---- DebugPrint is exempt from ModEnvBlacklist and lands in logs/*.log; tools/extract_telemetry.py reads it
+    DebugPrint("[RATOTEL_REC] " .. line .. "\n")
     local records = RATOTEL_Records
-    records[#records + 1] = tostring(json)
+    records[#records + 1] = line
     if #records > MAX_RECORDS then
         table.remove(records, 1)
     end
@@ -728,4 +731,12 @@ function OnMsg.CombatEnd()
     pcall(function()
         Emit({ev = "combat_end"})
     end)
+    FlushLogFile()
+end
+
+---- the log is buffered; flush per turn so a crash loses at most the turn in progress
+function OnMsg.TurnStart()
+    if ENABLED() then
+        FlushLogFile()
+    end
 end
