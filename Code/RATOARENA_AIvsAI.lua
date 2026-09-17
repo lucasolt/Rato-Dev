@@ -233,10 +233,6 @@ function RatoArena_Start(opts)
     for _, team in ipairs(g_Teams) do
         if team.control == "UI" then
             m.controls[team] = team.control
-            ---- NetSyncEvents.EndTurn ignores a non-UI team, so the pending human turn is ended by hand
-            if team == current then
-                g_Combat.player_end_turn[netUniqueId] = true
-            end
             team.control = "AI"
         end
     end
@@ -248,8 +244,16 @@ function RatoArena_Start(opts)
     RATOARENA.variants = {}
     RATOARENA.match = m
     RATOARENA.active = true
+    ---- The main loop is already parked in WaitEndTurn for the human turn: play it as AI, then end it
+    ---- by hand (NetSyncEvents.EndTurn ignores a non-UI team). Ending it directly would cost that side a turn.
     if current and m.controls[current] then
-        g_Combat:CheckEndTurn()
+        CreateGameTimeThread(function()
+            g_Combat:AITurn(current)
+            if g_Combat then
+                g_Combat.player_end_turn[netUniqueId] = true
+                g_Combat:CheckEndTurn()
+            end
+        end)
     end
     return "ok"
 end
@@ -356,6 +360,33 @@ function RatoArena_Status()
     end
     local team = g_Teams and g_Teams[g_CurrentTeam]
     return string.format("running turn=%s team=%s", tostring(g_Combat and g_Combat.current_turn), tostring(team and team.side))
+end
+
+---- Async; poll RATOARENA.load_state: "loading" -> "ok" or the error string.
+function RatoArena_Load(savename)
+    RATOARENA.load_state = "loading"
+    CreateRealTimeThread(function()
+        local err = LoadGame(savename)
+        ---- the sector loading screen waits for a "Start" click and keeps the game paused until then
+        local deadline = RealTime() + 30000
+        while not err and RealTime() < deadline do
+            local dlg = GetDialog("XZuluLoadingScreen")
+            if dlg and (dlg:GetContext() or empty_table).loaded then
+                LoadingScreenClose("idLoadedLoadingScreen", "loaded")
+                break
+            end
+            Sleep(250)
+        end
+        RATOARENA.load_state = err and tostring(err) or "ok"
+    end)
+    return "loading"
+end
+
+---- RATOARENA is a plain global and survives the load; a match left running would never finish.
+function OnMsg.PreLoadGame()
+    if RATOARENA.active then
+        Finish("aborted_by_load")
+    end
 end
 
 function OnMsg.DamageDone(attacker, target, dmg, hit_descr)
