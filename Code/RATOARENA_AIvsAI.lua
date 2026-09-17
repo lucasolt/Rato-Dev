@@ -389,6 +389,43 @@ function OnMsg.PreLoadGame()
     end
 end
 
+---------------------------------------------------------------------------------------------------
+-- console helpers (Enter, or Alt-Shift-C, in game)
+---------------------------------------------------------------------------------------------------
+
+---- Readable state/result for the console; the driver uses RatoArena_Status/Read instead.
+function RatoArena_Print()
+    local m = RATOARENA.match
+    if not m then
+        print("arena: idle -- RatoArena_Start({max_turns = 12}) to run a match")
+        return
+    end
+    if not m.result then
+        print("arena: " .. RatoArena_Status())
+        return
+    end
+    local r = m.result
+    printf("arena %s: %s after %d turns (%s)", r.label ~= "" and r.label or "match", r.winner, r.turns, r.reason)
+    for side, s in sorted_pairs(r.sides) do
+        printf("   %-8s %d/%d standing, %d dead, %d down, hp %d/%d, dealt %d in %d attacks",
+            side, s.alive or 0, s.units or 0, s.dead or 0, s.down or 0, s.hp or 0, s.hp0 or 0, s.dealt, s.attacks)
+    end
+end
+
+---- Savegame names as RatoArena_Load/the driver want them; filter is a lowercase substring.
+function RatoArena_Saves(filter)
+    local err, list = Savegame.ListForTag("savegame")
+    if err then
+        print("arena: " .. tostring(err))
+        return
+    end
+    for _, s in ipairs(list) do
+        if not filter or s.savename:lower():find(filter:lower(), 1, true) then
+            print("   " .. s.savename)
+        end
+    end
+end
+
 function OnMsg.DamageDone(attacker, target, dmg, hit_descr)
     local m = RATOARENA.active and RATOARENA.match
     if not m or not IsKindOf(attacker, "Unit") or not IsKindOf(target, "Unit") or not attacker.team then
