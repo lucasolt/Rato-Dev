@@ -101,4 +101,8 @@ return {
 			'CodeFileName', "Code/RATOTEL_AITelemetry.lua",
 		}),
 		}),
+	PlaceObj('ModItemCode', {
+		'name', "ZulibReloadFix",
+		'CodeFileName', "Code/ZulibReloadFix.lua",
+	}),
 }

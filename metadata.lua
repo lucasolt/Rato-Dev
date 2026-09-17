@@ -30,6 +30,7 @@ return PlaceObj('ModDef', {
 		"Code/FindComponent.lua",
 		"Code/RATODBG_AIDebugUI.lua",
 		"Code/RATOTEL_AITelemetry.lua",
+		"Code/ZulibReloadFix.lua",
 	},
 	'default_options', {},
 	'saved', 1789607412,
