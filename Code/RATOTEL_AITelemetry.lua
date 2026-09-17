@@ -550,6 +550,8 @@ local function CaptureBefore(unit, rec)
         rec.tgt_score = ctx.dest_target_score and ctx.dest_target_score[d]
         rec.hit_score = ctx.dest_hit_score and ctx.dest_hit_score[d]
         rec.dest_ap = ap(ctx.dest_ap and ctx.dest_ap[d])
+        ---- Think-time plan; compare with `shots[i].cth`, the CTH the roll used
+        rec.cth_plan = ctx.dest_cth and ctx.dest_cth[d]
     end
 
     local visible, closest = EnemyStats(ctx)
@@ -586,6 +588,8 @@ local function CaptureAfter(unit, rec, status)
         rec.aim_plan = ctx.dbg_aim_plan
         rec.atk = ctx.default_attack and ctx.default_attack.id
         rec.degraded = ctx.__ratoai_degraded and true or nil
+        rec.shots = ctx.dbg_shots
+        rec.refine = ctx.dbg_refine
     end
 
     ---- PROFILER (PERF_PROFILING.md). Sai no MESMO registro do resto, de proposito: o ms so
