@@ -2,10 +2,10 @@
 -- Rato Dev -- telemetria de decisao da IA
 --
 -- Grava, por unidade e por turno, o que a IA decidiu E os numeros que sustentaram a
--- decisao, em JSONL (uma linha JSON por registro) em:
+-- decisao, uma linha JSON por registro, em `RATOTEL_Records` (memoria). Para disco, pela sonda DAP:
 --
---     AppData/RatoTelemetry/ai_telemetry.jsonl
---     -> C:/Users/<voce>/AppData/Roaming/Jagged Alliance 3/RatoTelemetry/
+--     python tools/dap_probe.py -f tools/dump_telemetry.lua   (no Rato's AI Overhaul)
+--     -> AppData/RatoTelemetry/ai_telemetry.jsonl
 --
 -- Existe porque `unit.ai_context` e apagado no fim do turno
 -- (CombatCamera.lua:1362, `unit.ai_context = nil` para toda unidade jogada), entao
@@ -39,11 +39,9 @@ local function ENABLED()
     end
     return RATOAI_Debug and true or false
 end
-local OUT_DIR = "AppData/RatoTelemetry"
-local OUT_FILE = OUT_DIR .. "/ai_telemetry.jsonl"
-
----- quantos registros ficam em memoria antes de ir para o disco
-local FLUSH_EVERY = 15
+---- Mods can't write files (AsyncStringToFile is in ModEnvBlacklist); dump via DAP: tools/dump_telemetry.lua in RATOAI.
+RATOTEL_Records = {}
+local MAX_RECORDS = 3000
 ---- decompor o score do best_dest e do destino final policy a policy
 local RECORD_BREAKDOWN = true
 ---- teto de itens em listas, para nao gerar linha gigante
@@ -55,7 +53,6 @@ local MAX_PARTS = 16
 -- estado
 ---------------------------------------------------------------------------------------------------
 
-local buffer = {}
 local pending = setmetatable({}, {__mode = "k"}) ---- [unit] = registro em construcao
 local session_id = tostring(GetPreciseTicks())
 
@@ -77,16 +74,15 @@ end
 -- escrita
 ---------------------------------------------------------------------------------------------------
 
-local function Flush()
-    if #buffer == 0 then
-        return
+local reported = {}
+
+---- one print per distinct error; silent pcalls hid every failure this file ever had
+local function Report(where, err)
+    local key = where .. tostring(err)
+    if not reported[key] then
+        reported[key] = true
+        printf("[RATOTEL] %s failed: %s", where, tostring(err))
     end
-    local lines = buffer
-    buffer = {}
-    CreateRealTimeThread(function()
-        AsyncCreatePath(OUT_DIR)
-        AsyncStringToFile(OUT_FILE, table.concat(lines), -1)
-    end)
 end
 
 local function Emit(rec)
@@ -94,14 +90,16 @@ local function Emit(rec)
     rec.t = GameTime()
     rec.sector = gv_CurrentSectorId
     rec.turn = g_Combat and g_Combat.current_turn
-    ---- LuaToJSON devolve (err, json); err = nil em sucesso (verificado no processo vivo)
+    ---- json is a pstr userdata, not a Lua string: the old type() check dropped every record
     local err, json = LuaToJSON(rec)
-    if err or type(json) ~= "string" then
+    if err or not json then
+        Report("LuaToJSON(" .. tostring(rec.ev) .. ")", err)
         return
     end
-    buffer[#buffer + 1] = json .. "\n"
-    if #buffer >= FLUSH_EVERY then
-        Flush()
+    local records = RATOTEL_Records
+    records[#records + 1] = tostring(json)
+    if #records > MAX_RECORDS then
+        table.remove(records, 1)
     end
 end
 
@@ -677,7 +675,10 @@ function AIExecuteUnitBehavior(unit, force_or_skip_action)
     local rec = pending[unit]
     if rec then
         rec.run = (rec.run or 0) + 1
-        pcall(CaptureBefore, unit, rec)
+        local ok, err = pcall(CaptureBefore, unit, rec)
+        if not ok then
+            Report("CaptureBefore", err)
+        end
     end
 
     local pprev = ProfResume(unit)
@@ -685,7 +686,10 @@ function AIExecuteUnitBehavior(unit, force_or_skip_action)
     ProfEnd(pprev)
 
     if rec then
-        pcall(CaptureAfter, unit, rec, status)
+        local ok, err = pcall(CaptureAfter, unit, rec, status)
+        if not ok then
+            Report("CaptureAfter", err)
+        end
         ---- AIExecuteUnitBehavior pode ser reexecutada ("restart"); o proximo passe
         ---- comeca um registro novo, herdando so os scores de behavior
         pending[unit] = {ev = "turn", behs = rec.behs, run = rec.run}
@@ -720,9 +724,4 @@ function OnMsg.CombatEnd()
     pcall(function()
         Emit({ev = "combat_end"})
     end)
-    Flush()
-end
-
-function OnMsg.DoneMap()
-    Flush()
 end
