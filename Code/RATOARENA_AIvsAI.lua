@@ -390,6 +390,149 @@ function OnMsg.PreLoadGame()
 end
 
 ---------------------------------------------------------------------------------------------------
+-- composition: give a side one unit of every archetype
+--
+-- An arena whose enemies are all Soldier only exercises one archetype's weights. These spawn real
+-- unit types of the faction already on the map, so gear and stats match the archetype instead of
+-- being relabelled. Compose once, then SAVE: every match reloads the save.
+---------------------------------------------------------------------------------------------------
+
+---- archetypes that are not infantry, or belong to scripted fights -- never spawned for variety
+local NOT_INFANTRY = {
+    Turret = true, TurretBoss = true, Artillery = true, EmplacementGunner = true,
+    TutorialMinion = true, ActiveCivilian = true, CorazonBoss = true, TheMajor = true,
+}
+
+local function IsSpawnable(id, archetype)
+    if NOT_INFANTRY[archetype] or archetype:starts_with("Beast_") or archetype:starts_with("AnimTestDummy") then
+        return false
+    end
+    return not id:find("Tutorial", 1, true)
+end
+
+---- the archetype a unit data class declares, before PickCustomArchetype swaps it at runtime
+local function ClassArchetype(id)
+    local c = g_Classes[id]
+    return c and c.archetype or "Soldier"
+end
+
+local function UnitFamily(unit)
+    local id = unit.unitdatadef_id or unit.class or ""
+    return id:match("^%u%l+") or ""
+end
+
+---- opts: family (default: the one already fighting), remove (despawn that many of the most common
+---- archetype, to keep team size), dry (only report)
+function RatoArena_Compose(side, opts)
+    side = side or "enemy1"
+    opts = opts or {}
+    local team = table.find_value(g_Teams or empty_table, "side", side)
+    if not team or #(team.units or empty_table) == 0 then
+        return "no units on side " .. side
+    end
+
+    local family, present, counts = opts.family, {}, {}
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() then
+            local a = ClassArchetype(u.unitdatadef_id or u.class)
+            present[a] = (present[a] or 0) + 1
+            local f = UnitFamily(u)
+            counts[f] = (counts[f] or 0) + 1
+            if not family or (counts[f] > (counts[family] or 0)) then
+                family = opts.family or f
+            end
+        end
+    end
+
+    ---- one candidate class per missing archetype, base version preferred over _Stronger/_Elite
+    local wanted = {}
+    for id in sorted_pairs(UnitDataDefs) do
+        if id:starts_with(family) then
+            local a = ClassArchetype(id)
+            if not present[a] and IsSpawnable(id, a) then
+                local cur = wanted[a]
+                if not cur or #id < #cur then
+                    wanted[a] = id
+                end
+            end
+        end
+    end
+
+    local add = {}
+    for a, id in sorted_pairs(wanted) do
+        add[#add + 1] = { archetype = a, id = id }
+    end
+    if opts.dry then
+        local o = {}
+        for _, x in ipairs(add) do
+            o[#o + 1] = x.archetype .. "=" .. x.id
+        end
+        return string.format("%s family=%s missing %d: %s", side, family, #add, table.concat(o, " "))
+    end
+
+    ---- despawn first: the free positions found below should account for the ones leaving
+    local removed = 0
+    for _ = 1, opts.remove or 0 do
+        local top, top_n
+        for a, n in sorted_pairs(present) do
+            if not top_n or n > top_n then
+                top, top_n = a, n
+            end
+        end
+        for _, u in ipairs(team.units) do
+            if not u:IsDead() and ClassArchetype(u.unitdatadef_id or u.class) == top then
+                present[top] = present[top] - 1
+                removed = removed + 1
+                u:Despawn()
+                break
+            end
+        end
+    end
+
+    local spawned = {}
+    for i, x in ipairs(add) do
+        local anchor = team.units[1 + (i % Max(1, #team.units))]
+        local pos = anchor and (GetPassSlab(anchor) or anchor:GetPos())
+        local free = pos and DbgFindFreePassPositions(pos, 1, 12, xxhash(pos, i))
+        if free and free[1] then
+            local unit = SpawnUnit(x.id, string.format("RatoArena_%s_%d", x.id, i), free[1])
+            if unit then
+                unit:SetSide(side)
+                unit.pending_aware_state = "aware"
+                spawned[#spawned + 1] = x.archetype .. "=" .. x.id
+            end
+        end
+    end
+    if #spawned > 0 then
+        AlertPendingUnits()
+    end
+
+    return string.format("%s family=%s removed=%d spawned %d: %s -- now SAVE the game",
+        side, family, removed, #spawned, table.concat(spawned, " "))
+end
+
+---- archetype census of a side, as declared by unit data (what composition actually is)
+function RatoArena_Census(side)
+    side = side or "enemy1"
+    local team = table.find_value(g_Teams or empty_table, "side", side)
+    if not team then
+        return "no team " .. side
+    end
+    local counts = {}
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() then
+            local a = ClassArchetype(u.unitdatadef_id or u.class)
+            counts[a] = (counts[a] or 0) + 1
+        end
+    end
+    local o = {}
+    for a, n in sorted_pairs(counts) do
+        o[#o + 1] = a .. ":" .. n
+    end
+    return side .. " " .. table.concat(o, " ")
+end
+
+---------------------------------------------------------------------------------------------------
 -- console helpers (Enter, or Alt-Shift-C, in game)
 ---------------------------------------------------------------------------------------------------
 
