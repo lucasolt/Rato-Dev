@@ -226,7 +226,24 @@ local function SideStats(m, side)
     return s
 end
 
----- opts: label, max_turns (default 15), time_factor
+---- Weather changes visibility and hit chances, so matches must share it to be comparable.
+---- Same path as the engine's weather cheat (NetSyncEvents.CheatWeatherTOD).
+local function ApplyWeather(weather, tod)
+    if weather == "keep" then
+        return true
+    end
+    if not GameStateDefs[weather] or not GameStateDefs[tod] then
+        return false
+    end
+    local region = mapdata.Region
+    ChangeGameState({ [weather] = true, [tod] = true, [region] = true })
+    SetLightmodel(1, SelectLightmodel(region, weather, tod), 0)
+    return true
+end
+
+---- opts: label, max_turns (default 15), time_factor,
+---- weather (default "ClearSky"; RainLight, RainHeavy, Fog, DustStorm, FireStorm, Heat, or "keep"),
+---- tod (default "Day"; Sunrise, Sunset, Night)
 function RatoArena_Start(opts)
     opts = opts or {}
     if not g_Combat then
@@ -235,7 +252,12 @@ function RatoArena_Start(opts)
     if RATOARENA.active then
         return "already active"
     end
+    local weather, tod = opts.weather or "ClearSky", opts.tod or "Day"
+    if not ApplyWeather(weather, tod) then
+        return string.format("unknown weather/tod %s/%s", tostring(weather), tostring(tod))
+    end
     local m = {
+        weather = weather ~= "keep" and weather .. "/" .. tod or "keep",
         label = opts.label or "",
         max_turns = opts.max_turns or 15,
         start_turn = g_Combat.current_turn,
@@ -868,6 +890,8 @@ function RatoArena_Run(opts)
                 save = opts.save,
                 max_turns = opts.max_turns or 12,
                 time_factor = opts.time_factor,
+                weather = opts.weather,
+                tod = opts.tod,
                 label = opts.label or "run",
             })
             if not rec then
@@ -1016,6 +1040,8 @@ function RatoArena_Evolve(opts)
         sigma = opts.sigma or 25,
         max_turns = opts.max_turns or 12,
         time_factor = opts.time_factor,
+        weather = opts.weather,
+        tod = opts.tod,
     }
     if not cfg.save then
         return "opts.save is required -- every match reloads it"
@@ -1049,6 +1075,8 @@ function RatoArena_Evolve(opts)
                         save = cfg.save,
                         max_turns = cfg.max_turns,
                         time_factor = cfg.time_factor,
+                        weather = cfg.weather,
+                        tod = cfg.tod,
                         label = string.format("g%d/i%d/r%d", state.gen, i, r),
                     })
                     if rec then
