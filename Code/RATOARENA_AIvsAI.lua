@@ -248,7 +248,13 @@ function RatoArena_Start(opts)
     ---- by hand (NetSyncEvents.EndTurn ignores a non-UI team). Ending it directly would cost that side a turn.
     if current and m.controls[current] then
         CreateGameTimeThread(function()
-            g_Combat:AITurn(current)
+            ---- outside the combat main loop the watchdog kills an AI think mid-way ("Infinite loop destroyed")
+            PauseInfiniteLoopDetection("RatoArena")
+            local ok, err = pcall(g_Combat.AITurn, g_Combat, current)
+            ResumeInfiniteLoopDetection("RatoArena")
+            if not ok then
+                printf("arena: first AI turn failed: %s", tostring(err))
+            end
             if g_Combat then
                 g_Combat.player_end_turn[netUniqueId] = true
                 g_Combat:CheckEndTurn()
@@ -655,6 +661,317 @@ function RatoArena_Census(side)
         o[#o + 1] = a .. ":" .. n
     end
     return side .. " " .. table.concat(o, " ")
+end
+
+---------------------------------------------------------------------------------------------------
+-- running batches and evolution from the console
+--
+-- Same loop the python driver runs, in Lua: reload the save, apply a genome, play, score, repeat.
+-- Everything prints to the console and to the log, since a mod cannot write files.
+---------------------------------------------------------------------------------------------------
+
+---- Higher is better for `side`: HP traded, units taken out, win/loss. Percent-scaled integers.
+function RatoArena_Fitness(rec, side)
+    local own, foe = rec.sides[side], { hp0 = 0, hp = 0, out = 0, units = 0 }
+    if not own then
+        return 0
+    end
+    for s, st in pairs(rec.sides) do
+        if s ~= side then
+            foe.hp0 = foe.hp0 + (st.hp0 or 0)
+            foe.hp = foe.hp + (st.hp or 0)
+            foe.out = foe.out + (st.dead or 0) + (st.down or 0)
+            foe.units = foe.units + (st.units or 0)
+        end
+    end
+    local function frac(lost, total)
+        return total > 0 and MulDivRound(lost, 100, total) or 0
+    end
+    local score = frac(foe.hp0 - foe.hp, foe.hp0) - frac((own.hp0 or 0) - (own.hp or 0), own.hp0 or 0)
+    score = score + frac(foe.out, foe.units) - frac((own.dead or 0) + (own.down or 0), own.units or 0)
+    if rec.winner == side then
+        score = score + 50
+    elseif rec.winner ~= "draw" then
+        score = score - 50
+    end
+    return score
+end
+
+---- Blocks the calling real-time thread until the match ends. Returns the result record.
+local function PlayOne(opts)
+    if opts.save then
+        RatoArena_Load(opts.save)
+        local deadline = RealTime() + 240000
+        while RATOARENA.load_state == "loading" and RealTime() < deadline do
+            Sleep(500)
+        end
+        if RATOARENA.load_state ~= "ok" then
+            return nil, "load failed: " .. tostring(RATOARENA.load_state)
+        end
+        while not g_Combat and RealTime() < deadline do
+            Sleep(500)
+        end
+        Sleep(3000) ---- let the combat thread reach its turn wait
+    end
+    if not g_Combat then
+        return nil, "no combat"
+    end
+    local started = RatoArena_Start(opts)
+    if started ~= "ok" then
+        return nil, started
+    end
+    local deadline = RealTime() + (opts.timeout or 3600000)
+    while RealTime() < deadline do
+        local m = RATOARENA.match
+        if m and m.result then
+            return m.result
+        end
+        Sleep(1000)
+    end
+    RatoArena_Stop("timeout")
+    return RATOARENA.match and RATOARENA.match.result
+end
+
+---- opts: save, matches (default 1), max_turns, time_factor, label, side (for the score), genome
+function RatoArena_Run(opts)
+    opts = opts or {}
+    if RATOARENA.busy then
+        return "already running -- RatoArena_Abort() to stop it"
+    end
+    local side = opts.side or "enemy1"
+    CreateRealTimeThread(function()
+        RATOARENA.busy, RATOARENA.abort = true, false
+        local scores = {}
+        for i = 1, opts.matches or 1 do
+            if RATOARENA.abort then
+                break
+            end
+            if opts.genome then
+                RatoArena_SetGenome(side, opts.genome)
+            end
+            local rec, err = PlayOne({
+                save = opts.save,
+                max_turns = opts.max_turns or 12,
+                time_factor = opts.time_factor,
+                label = opts.label or "run",
+            })
+            if not rec then
+                printf("arena: match %d failed: %s", i, tostring(err))
+                break
+            end
+            local f = RatoArena_Fitness(rec, side)
+            scores[#scores + 1] = f
+            printf("arena: match %d/%d %s in %d turns -- fitness(%s) = %d",
+                i, opts.matches or 1, rec.winner, rec.turns, side, f)
+        end
+        RATOARENA.busy = false
+        if #scores > 1 then
+            local sum, lo, hi = 0, scores[1], scores[1]
+            for _, f in ipairs(scores) do
+                sum = sum + f
+                lo, hi = Min(lo, f), Max(hi, f)
+            end
+            printf("arena: %d matches, mean %d, spread %d (noise floor: ignore gains smaller than this)",
+                #scores, MulDivRound(sum, 1, #scores), hi - lo)
+        end
+    end)
+    return "started -- watch the console; RatoArena_Abort() stops after the current match"
+end
+
+function RatoArena_Abort()
+    RATOARENA.abort = true
+    if RATOARENA.active then
+        RatoArena_Stop("aborted")
+    end
+    return "will stop after the current match"
+end
+
+---- Every match played this session, grouped by label.
+function RatoArena_Report(side)
+    side = side or "enemy1"
+    local by_label = {}
+    for _, rec in ipairs(RATOARENA.results) do
+        local l = rec.label ~= "" and rec.label or "(none)"
+        by_label[l] = by_label[l] or {}
+        table.insert(by_label[l], RatoArena_Fitness(rec, side))
+    end
+    if not next(by_label) then
+        print("arena: no matches yet this session")
+        return
+    end
+    printf("arena fitness for %s:", side)
+    for label, f in sorted_pairs(by_label) do
+        local sum, lo, hi = 0, f[1], f[1]
+        for _, v in ipairs(f) do
+            sum = sum + v
+            lo, hi = Min(lo, v), Max(hi, v)
+        end
+        printf("   %-24s n=%d mean %d spread %d", label, #f, MulDivRound(sum, 1, #f), hi - lo)
+    end
+end
+
+---------------------------------------------------------------------------------------------------
+-- evolution, console side
+---------------------------------------------------------------------------------------------------
+
+local function GeneList(archetype_ids, pattern)
+    local genes = {}
+    for _, id in ipairs(archetype_ids) do
+        local arch = Archetypes[id]
+        if arch then
+            local out = {}
+            WalkSpace(arch, "", out, 0)
+            for _, e in ipairs(out) do
+                if not pattern or e.p:find(pattern) then
+                    e.arch = id
+                    genes[#genes + 1] = e
+                end
+            end
+        end
+    end
+    return genes
+end
+
+---- Uniform step of at most sigma percent, clamped to the property's own limits.
+local function MutateGenome(parent, genes, rate, sigma)
+    local child = {}
+    for arch, g in pairs(parent) do
+        child[arch] = table.copy(g)
+    end
+    local changed = 0
+    for _, e in ipairs(genes) do
+        if AsyncRand(100) < rate then
+            local cur = (child[e.arch] or empty_table)[e.p] or e.v
+            local span = Max(1, MulDivRound(abs(cur), sigma, 100))
+            local new = cur + AsyncRand(2 * span + 1) - span
+            new = Max(e.min or 0, new)
+            if e.max then
+                new = Min(e.max, new)
+            end
+            if new ~= e.v then
+                child[e.arch] = child[e.arch] or {}
+                child[e.arch][e.p] = new
+                changed = changed + 1
+            end
+        end
+    end
+    if changed == 0 then ---- never evaluate a copy of the parent
+        local e = genes[1 + AsyncRand(#genes)]
+        child[e.arch] = child[e.arch] or {}
+        child[e.arch][e.p] = e.v + Max(1, MulDivRound(abs(e.v), sigma, 100))
+    end
+    return child
+end
+
+---- Prints a genome as pasteable Lua, so a winner survives outside this session (also in the log).
+function RatoArena_PrintGenome(genome)
+    genome = genome or (RATOARENA.evolve and RATOARENA.evolve.best)
+    if not genome then
+        print("arena: no genome")
+        return
+    end
+    print("{")
+    for arch, g in sorted_pairs(genome) do
+        printf('    %s = {', arch)
+        for p, v in sorted_pairs(g) do
+            printf('        ["%s"] = %d,', p, v)
+        end
+        print("    },")
+    end
+    print("}")
+end
+
+---- opts: save, side, archetypes (default {"Soldier"}), genes (pattern, default "Weight$"),
+---- pop, elite, gens, repeats, rate, sigma, max_turns, time_factor
+function RatoArena_Evolve(opts)
+    opts = opts or {}
+    if RATOARENA.busy then
+        return "already running -- RatoArena_Abort() to stop it"
+    end
+    local cfg = {
+        save = opts.save,
+        side = opts.side or "enemy1",
+        archetypes = opts.archetypes or { "Soldier" },
+        genes = opts.genes or "Weight$",
+        pop = opts.pop or 6,
+        elite = opts.elite or 2,
+        gens = opts.gens or 10,
+        repeats = opts.repeats or 2,
+        rate = opts.rate or 15,
+        sigma = opts.sigma or 25,
+        max_turns = opts.max_turns or 12,
+        time_factor = opts.time_factor,
+    }
+    if not cfg.save then
+        return "opts.save is required -- every match reloads it"
+    end
+    local genes = GeneList(cfg.archetypes, cfg.genes)
+    if #genes == 0 then
+        return "no genes matched " .. cfg.genes
+    end
+
+    CreateRealTimeThread(function()
+        RATOARENA.busy, RATOARENA.abort = true, false
+        local state = { cfg = cfg, gen = 0, population = { {} }, best = nil, best_score = nil }
+        RATOARENA.evolve = state
+        printf("arena: evolving %s over %d genes of %s", cfg.side, #genes, table.concat(cfg.archetypes, ","))
+
+        while state.gen < cfg.gens and not RATOARENA.abort do
+            while #state.population < cfg.pop do
+                local parent = state.population[1 + AsyncRand(Min(#state.population, Max(1, cfg.elite)))]
+                state.population[#state.population + 1] = MutateGenome(parent, genes, cfg.rate, cfg.sigma)
+            end
+
+            local scored = {}
+            for i, genome in ipairs(state.population) do
+                local total, n = 0, 0
+                for r = 1, cfg.repeats do
+                    if RATOARENA.abort then
+                        break
+                    end
+                    RatoArena_SetGenome(cfg.side, genome)
+                    local rec, err = PlayOne({
+                        save = cfg.save,
+                        max_turns = cfg.max_turns,
+                        time_factor = cfg.time_factor,
+                        label = string.format("g%d/i%d/r%d", state.gen, i, r),
+                    })
+                    if rec then
+                        total = total + RatoArena_Fitness(rec, cfg.side)
+                        n = n + 1
+                    else
+                        printf("arena: match failed: %s", tostring(err))
+                    end
+                end
+                local mean = n > 0 and MulDivRound(total, 1, n) or -999
+                scored[#scored + 1] = { genome = genome, score = mean }
+                printf("arena: gen %d individual %d/%d scored %d", state.gen, i, #state.population, mean)
+            end
+            table.sort(scored, function(a, b) return a.score > b.score end)
+
+            local list = {}
+            for _, x in ipairs(scored) do
+                list[#list + 1] = tostring(x.score)
+            end
+            printf("arena: generation %d done -- best %d, all [%s]", state.gen, scored[1].score, table.concat(list, " "))
+            if not state.best_score or scored[1].score > state.best_score then
+                state.best, state.best_score = scored[1].genome, scored[1].score
+                print("arena: new best genome --")
+                RatoArena_PrintGenome(state.best)
+            end
+
+            state.population = {}
+            for i = 1, Min(cfg.elite, #scored) do
+                state.population[i] = scored[i].genome
+            end
+            state.gen = state.gen + 1
+        end
+
+        RATOARENA.busy = false
+        printf("arena: evolution stopped at generation %d, best %s", state.gen, tostring(state.best_score))
+        RatoArena_PrintGenome(state.best)
+    end)
+    return "started -- watch the console; RatoArena_Abort() stops it"
 end
 
 ---------------------------------------------------------------------------------------------------
