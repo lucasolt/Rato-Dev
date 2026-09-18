@@ -20,6 +20,33 @@ RATOARENA = {
     out = {}, ---- [key] = string, paged out by RatoArena_Read (DAP caps a result at ~512 chars)
 }
 
+---------------------------------------------------------------------------------------------------
+-- tutorial hints
+--
+-- A hint popup waits for a click and stalls an unattended batch. Suppressed only while the arena
+-- drives the game, so the player's HintsEnabled option is left alone.
+---------------------------------------------------------------------------------------------------
+
+local function ArenaRunning()
+    return RATOARENA.active or RATOARENA.busy or RATOARENA.load_state == "loading"
+end
+
+local OpenTutorialPopup_orig = OpenTutorialPopup
+function OpenTutorialPopup(...)
+    if ArenaRunning() then
+        return false
+    end
+    return OpenTutorialPopup_orig(...)
+end
+
+local OpenTutorialPopupSatelliteMap_orig = OpenTutorialPopupSatelliteMap
+function OpenTutorialPopupSatelliteMap(...)
+    if ArenaRunning() then
+        return false
+    end
+    return OpenTutorialPopupSatelliteMap_orig(...)
+end
+
 ---- identity-compared against Archetypes.EmplacementGunner in CombatCamera.lua
 local NEVER_PROXY = { EmplacementGunner = true }
 
@@ -244,6 +271,7 @@ function RatoArena_Start(opts)
     RATOARENA.variants = {}
     RATOARENA.match = m
     RATOARENA.active = true
+    CloseCurrentTutorialPopup() ---- one may already be on screen from the load
     ---- The main loop is already parked in WaitEndTurn for the human turn: play it as AI, then end it
     ---- by hand (NetSyncEvents.EndTurn ignores a non-UI team). Ending it directly would cost that side a turn.
     if current and m.controls[current] then
