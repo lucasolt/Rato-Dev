@@ -322,6 +322,19 @@ local function UnitRow(m, unit)
     end
 end
 
+---- "side:arch:path=value;..." -- which weights a match was played with, as one CSV-safe field
+local function GenomeText(genomes)
+    local parts = {}
+    for side, genome in sorted_pairs(genomes) do
+        for arch, genes in sorted_pairs(genome) do
+            for path, v in sorted_pairs(genes) do
+                parts[#parts + 1] = string.format("%s:%s:%s=%d", side, arch, path, v)
+            end
+        end
+    end
+    return table.concat(parts, ";")
+end
+
 local function Finish(reason)
     local m = RATOARENA.match
     if not m or m.finished then
@@ -388,6 +401,8 @@ local function Finish(reason)
         sides = m.sides,
         units = units,
         genes = genomes,
+        genome = GenomeText(RATOARENA.genomes),
+        weather = m.weather,
     }
     m.result = rec
     RATOARENA.results[#RATOARENA.results + 1] = rec
@@ -947,6 +962,67 @@ function RatoArena_Report(side)
         end
         printf("   %-24s n=%d mean %d spread %d", label, #f, MulDivRound(sum, 1, #f), hi - lo)
     end
+end
+
+---- One console line per match played this session (survives save loads, not ReloadLua).
+function RatoArena_Results(side)
+    side = side or "enemy1"
+    if #RATOARENA.results == 0 then
+        print("arena: no matches yet this session")
+        return
+    end
+    printf("arena: %d matches, fitness for %s", #RATOARENA.results, side)
+    for i, rec in ipairs(RATOARENA.results) do
+        local o = {}
+        for s, st in sorted_pairs(rec.sides) do
+            o[#o + 1] = string.format("%s hp %d/%d dead %d dealt %d ff %d", s, st.hp or 0, st.hp0 or 0,
+                (st.dead or 0) + (st.down or 0), st.dealt or 0, st.friendly or 0)
+        end
+        printf("  #%-3d %-14s %-8s t%-2d fit %4d | %s%s", i, rec.label, rec.winner, rec.turns,
+            RatoArena_Fitness(rec, side), table.concat(o, " | "), rec.genome ~= "" and " | mutated" or "")
+    end
+end
+
+local SIDE_FIELDS = { "units", "hp0", "hp", "dead", "down", "alive", "dealt", "friendly", "kills", "attacks" }
+
+---- CSV of every match. Mod code cannot write files, so from the console run:
+---- AsyncStringToFile("AppData/arena_results.csv", RatoArena_CSV())
+function RatoArena_CSV(side)
+    side = side or "enemy1"
+    local sides, seen = {}, {}
+    for _, rec in ipairs(RATOARENA.results) do
+        for s in pairs(rec.sides) do
+            if not seen[s] then
+                seen[s] = true
+                sides[#sides + 1] = s
+            end
+        end
+    end
+    table.sort(sides)
+    local head = { "n", "label", "winner", "reason", "turns", "real_s", "weather", "fitness_" .. side }
+    for _, s in ipairs(sides) do
+        for _, f in ipairs(SIDE_FIELDS) do
+            head[#head + 1] = s .. "_" .. f
+        end
+    end
+    head[#head + 1] = "genome"
+    local lines = { table.concat(head, ",") }
+    for i, rec in ipairs(RATOARENA.results) do
+        local row = { i, rec.label, rec.winner, rec.reason, rec.turns, MulDivRound(rec.real_ms or 0, 1, 1000),
+            rec.weather or "", RatoArena_Fitness(rec, side) }
+        for _, s in ipairs(sides) do
+            local st = rec.sides[s] or empty_table
+            for _, f in ipairs(SIDE_FIELDS) do
+                row[#row + 1] = st[f] or 0
+            end
+        end
+        row[#row + 1] = '"' .. (rec.genome or "") .. '"'
+        for k, v in ipairs(row) do
+            row[k] = tostring(v)
+        end
+        lines[#lines + 1] = table.concat(row, ",")
+    end
+    return table.concat(lines, "\n") .. "\n"
 end
 
 ---------------------------------------------------------------------------------------------------
