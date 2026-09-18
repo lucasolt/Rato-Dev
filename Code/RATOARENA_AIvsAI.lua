@@ -455,17 +455,74 @@ local function UnitFamily(unit)
     return id:match("^%u%l+") or ""
 end
 
----- shortest matching class id of that family, base version before _Stronger/_Elite
+---- unit data archetype is shared by very different kits (Skirmisher: LegionGoon has a handgun, LegionScout an MP40)
+local PREFERRED_WEAPON = { Skirmisher = "SMG" }
+
+---- weapon types found in a class's loot tables
+local function ClassWeaponTypes(id)
+    local types = {}
+    local function walk(o, depth)
+        if type(o) ~= "table" or depth > 6 then
+            return
+        end
+        local item = rawget(o, "item")
+        local cls = type(item) == "string" and g_Classes[item]
+        if cls and cls.WeaponType then
+            types[cls.WeaponType] = true
+        end
+        local sub = rawget(o, "loot_def")
+        if type(sub) == "string" and depth < 3 then
+            walk(LootDefs[sub], depth + 1)
+        end
+        for _, v in ipairs(o) do
+            walk(v, depth + 1)
+        end
+    end
+    for _, loot in ipairs((UnitDataDefs[id] or empty_table).Equipment or empty_table) do
+        walk(LootDefs[loot], 0)
+    end
+    return types
+end
+
+---- shortest matching class id of that family (base version before _Stronger/_Elite),
+---- preferring one armed with the archetype's preferred weapon
 local function PickClass(family, archetype)
-    local best
+    local best, best_armed
+    local want = PREFERRED_WEAPON[archetype]
     for id in sorted_pairs(UnitDataDefs) do
         if id:starts_with(family) and ClassArchetype(id) == archetype and IsSpawnable(id, archetype) then
             if not best or #id < #best then
                 best = id
             end
+            if want and ClassWeaponTypes(id)[want] and (not best_armed or #id < #best_armed) then
+                best_armed = id
+            end
         end
     end
-    return best
+    return best_armed or best, best_armed
+end
+
+---- class ids a side's archetype is filled with, in round-robin order; nil = any class of it counts
+local function ClassList(family, archetype, spec)
+    local list = spec.classes and spec.classes[archetype]
+    if list then
+        return type(list) == "table" and list or { list }
+    end
+    local _, armed = PickClass(family, archetype)
+    return armed and { armed } or nil
+end
+
+local function UnitClass(u)
+    return u.unitdatadef_id or u.class
+end
+
+local function DespawnClass(team, class_id)
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() and UnitClass(u) == class_id then
+            u:Despawn()
+            return true
+        end
+    end
 end
 
 local spawn_seq = 0
@@ -557,11 +614,39 @@ function RatoArena_Mix(side, spec)
         targets[a] = (targets[a] or 0) + 1
     end
 
+    local by_class = {}
+    for _, u in ipairs(team.units) do
+        if not u:IsDead() then
+            by_class[UnitClass(u)] = (by_class[UnitClass(u)] or 0) + 1
+        end
+    end
+
+    ---- p.cls set: count and swap by class, so e.g. handgun goons make way for SMG scouts
     local plan = {}
     local seen = {}
     for a in sorted_pairs(targets) do
         seen[a] = true
-        plan[#plan + 1] = { a = a, delta = targets[a] - (counts[a] or 0) }
+        local list = ClassList(family, a, spec)
+        if list then
+            local want = {}
+            for i = 1, targets[a] do
+                local c = list[1 + ((i - 1) % #list)]
+                want[c] = (want[c] or 0) + 1
+            end
+            for c, n in sorted_pairs(by_class) do
+                if ClassArchetype(c) == a and not want[c] then
+                    plan[#plan + 1] = { a = a, cls = c, delta = -n }
+                end
+            end
+            for _, c in ipairs(list) do
+                if want[c] then
+                    plan[#plan + 1] = { a = a, cls = c, delta = want[c] - (by_class[c] or 0) }
+                    want[c] = nil
+                end
+            end
+        else
+            plan[#plan + 1] = { a = a, delta = targets[a] - (counts[a] or 0) }
+        end
     end
     for a in sorted_pairs(counts) do
         if not seen[a] then
@@ -573,23 +658,25 @@ function RatoArena_Mix(side, spec)
         local o = {}
         for _, p in ipairs(plan) do
             if p.delta ~= 0 then
-                o[#o + 1] = string.format("%s %+d", p.a, p.delta)
+                o[#o + 1] = string.format("%s %+d", p.cls or p.a, p.delta)
             end
         end
         return string.format("%s size=%d family=%s now [%s] plan: %s",
             side, size, family, CensusText(counts), #o > 0 and table.concat(o, " ") or "nothing to do")
     end
 
+    ---- despawns first, so the free positions account for the ones leaving
+    table.sort(plan, function(x, y) return x.delta < y.delta end)
     local done = {}
     for _, p in ipairs(plan) do
         if p.delta < 0 then
             for _ = 1, -p.delta do
-                if DespawnOne(team, p.a) then
-                    done[#done + 1] = p.a .. "-1"
+                if p.cls and DespawnClass(team, p.cls) or not p.cls and DespawnOne(team, p.a) then
+                    done[#done + 1] = (p.cls or p.a) .. "-1"
                 end
             end
         elseif p.delta > 0 then
-            local class_id = PickClass(family, p.a)
+            local class_id = p.cls or PickClass(family, p.a)
             for _ = 1, p.delta do
                 if class_id and SpawnFor(team, side, class_id) then
                     done[#done + 1] = class_id .. "+1"
@@ -629,8 +716,8 @@ function RatoArena_Compose(side, opts)
     for id in sorted_pairs(UnitDataDefs) do
         if id:starts_with(family) then
             local a = ClassArchetype(id)
-            if not counts[a] and IsSpawnable(id, a) and (not add[a] or #id < #add[a]) then
-                add[a] = id
+            if not counts[a] and not add[a] and IsSpawnable(id, a) then
+                add[a] = PickClass(family, a)
             end
         end
     end
