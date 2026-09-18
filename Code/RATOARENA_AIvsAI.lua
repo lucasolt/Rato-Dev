@@ -898,9 +898,8 @@ function RatoArena_Run(opts)
             if RATOARENA.abort then
                 break
             end
-            if opts.genome then
-                RatoArena_SetGenome(side, opts.genome)
-            end
+            ---- no genome = shipped weights, even if an earlier Evolve left one applied
+            RatoArena_SetGenome(side, opts.genome or false)
             local rec, err = PlayOne({
                 save = opts.save,
                 max_turns = opts.max_turns or 12,
@@ -1187,6 +1186,7 @@ function RatoArena_Evolve(opts)
         end
 
         RATOARENA.busy = false
+        RatoArena_SetGenome(cfg.side, false)
         printf("arena: evolution stopped at generation %d, best %s", state.gen, tostring(state.best_score))
         RatoArena_PrintGenome(state.best)
     end)
