@@ -159,6 +159,8 @@ end
 ---------------------------------------------------------------------------------------------------
 
 const.RATOAI = const.RATOAI or {}
+---- RATOAI's TELEMETRY_Lite stands down while this full recorder is on
+const.RATOAI.TelemetryFullActive = ENABLED
 if const.RATOAI.Profile == nil then
     const.RATOAI.Profile = false
 end
