@@ -3,7 +3,7 @@
 --
 -- Grava, por unidade e por turno, o que a IA decidiu E os numeros que sustentaram a
 -- decisao, uma linha JSON por registro, no log do jogo (prefixo `[RATOTEL_REC]`) e em
--- `RATOTEL_Records` (memoria). Para extrair do log, no Rato's AI Overhaul:
+-- `RATOTEL_Records` (memoria). Para extrair do log, na pasta do Rato Dev:
 --
 --     python tools/extract_telemetry.py          -> RatoTelemetry/ai_telemetry.jsonl
 --
@@ -20,26 +20,20 @@
 --   * a decomposicao por policy roda DEPOIS que a unidade ja agiu, entao mesmo que
 --     ela mexa em cache do context, nao influencia decisao nenhuma;
 --   * const.RATOAI.Telemetry = false desliga tudo, deixando so a chamada direta ao
---     original; sem ela, segue o RATOAI_Debug.
+--     original; sem ela, fica ligado.
 ---------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------------------------
 -- PARAMETROS
 ---------------------------------------------------------------------------------------------------
----- LIGADO PELO MESMO INTERRUPTOR DO RESTO DO DEBUG.
----- Era um `false` chumbado, o que fazia esta ferramenta -- que existe exatamente para nao
----- precisar forcar comportamento pela UI -- ficar invisivel. `const.RATOAI.Telemetry` sobrepoe
----- explicitamente (true/false); sem ela, segue o RATOAI_Debug.
----- Funcao e nao valor: o RATOAI_Debug e recomputado no CombatStart, DEPOIS deste load. Um
----- booleano capturado aqui congelaria o valor errado. Nao ha custo de laco quente -- estes
----- wrappers rodam uma vez por unidade por turno.
+---- On in normal play (the only recorder since RATOAI's TELEMETRY_Lite was dropped); const.RATOAI.Telemetry = false turns it off.
 local function ENABLED()
     local v = const.RATOAI and const.RATOAI.Telemetry
     if v ~= nil then
         return v
     end
-    return RATOAI_Debug and true or false
+    return true
 end
----- Mods can't write files (AsyncStringToFile is in ModEnvBlacklist); dump via DAP: tools/dump_telemetry.lua in RATOAI.
+---- Mods can't write files (AsyncStringToFile is in ModEnvBlacklist); dump via DAP: tools/dump_telemetry.lua.
 RATOTEL_Records = {}
 local MAX_RECORDS = 3000
 ---- decompor o score do best_dest e do destino final policy a policy
@@ -63,6 +57,7 @@ local function slabs(dist)
     return MulDivRound(dist, 10, const.SlabSizeX) / 10
 end
 
+---- displayed AP (GBO3: const.Scale.AP = 100, ~10x vanilla)
 local function ap(v)
     if not v then
         return nil
@@ -159,8 +154,6 @@ end
 ---------------------------------------------------------------------------------------------------
 
 const.RATOAI = const.RATOAI or {}
----- RATOAI's TELEMETRY_Lite stands down while this full recorder is on
-const.RATOAI.TelemetryFullActive = ENABLED
 if const.RATOAI.Profile == nil then
     const.RATOAI.Profile = false
 end
@@ -541,6 +534,10 @@ local function CaptureBefore(unit, rec)
     rec.arch = ctx.archetype and ctx.archetype.id
     rec.kw = unit.AIKeywords and table.concat(unit.AIKeywords, ",") or nil
     rec.side = unit.team and unit.team.side
+    rec.def = unit.unitdatadef_id or nil
+    rec.role = unit.custom_role or unit.role or nil
+    rec.mrk = unit.Marksmanship
+    rec.weapon = ctx.weapon and ctx.weapon.class or nil
     rec.hp = unit.HitPoints
     rec.maxhp = unit.MaxHitPoints
     rec.ap0 = ap(unit.ActionPoints)
@@ -710,6 +707,112 @@ function AIExecuteUnitBehavior(unit, force_or_skip_action)
     end
 
     return status
+end
+
+---------------------------------------------------------------------------------------------------
+-- attack outcomes (every side, so AI and player accuracy can be compared)
+---------------------------------------------------------------------------------------------------
+
+local function ShotList(results)
+    if not results.attacks then
+        return results.shots or empty_table
+    end
+    ---- DualShot: one shot list per weapon
+    local all = {}
+    for _, attack in ipairs(results.attacks) do
+        for _, shot in ipairs(attack.shots or empty_table) do
+            all[#all + 1] = shot
+        end
+    end
+    return all
+end
+
+local function HasSuppressPacket(results, target)
+    for _, packet in ipairs(results.extra_packets or empty_table) do
+        local fx = packet.effects
+        if packet.target == target and
+            (fx == "Suppressed" or (type(fx) == "table" and table.find(fx, "Suppressed"))) then
+            return true
+        end
+    end
+end
+
+local function RecordAttack(unit, action, target, results, attack_args)
+    local weapon = results.weapon
+    if not IsKindOfClasses(weapon, "Firearm", "MeleeWeapon") then
+        return
+    end
+    local tunit = IsKindOf(target, "Unit") and target or nil
+    local cths, hits = {}, 0
+    for i, shot in ipairs(ShotList(results)) do
+        cths[i] = shot.cth or shot.chance_to_hit
+        if not shot.miss then
+            for _, hit in ipairs(shot.hits or empty_table) do
+                if tunit and hit.obj == tunit then
+                    hits = hits + 1
+                    break
+                end
+            end
+        end
+    end
+    local mods = {}
+    for _, mod in ipairs(results.chance_to_hit_modifiers or empty_table) do
+        local id = mod.id or "Stat"
+        if id == "HipshotPenalty" and type(mod.name) == "table" then
+            id = tostring(mod.name[2]) ---- Hipshot vs Snapshot share one preset
+        end
+        if (mod.value or 0) ~= 0 then
+            mods[id] = mod.value
+        end
+    end
+    local from = results.attack_pos or unit:GetPos()
+    local tpos = IsValid(target) and target:GetPos()
+    if tpos and not IsValidZ(tpos) then
+        tpos = tpos:SetTerrainZ()
+    end
+    local ctx = unit.ai_context
+    local own = g_Teams[g_CurrentTeam] == unit.team
+    local plan = own and pending[unit]
+    Emit({
+        ev = "attack",
+        unit = unit.session_id,
+        side = unit.team and unit.team.side,
+        ai = (unit.team and unit.team.control == "AI") or nil,
+        arch = ctx and ctx.archetype and ctx.archetype.id or nil,
+        role = unit.custom_role or unit.role or nil,
+        action = action and action.id,
+        weapon = weapon.class,
+        target = tunit and tunit.session_id or nil,
+        tside = tunit and tunit.team and tunit.team.side or nil,
+        ---- false = interrupt/overwatch on the enemy's turn
+        own = own,
+        aim = results.aim or (attack_args and attack_args.aim),
+        part = attack_args and attack_args.target_spot_group or nil,
+        stance = unit.stance,
+        dist = tpos and slabs(from:Dist(tpos)) or nil,
+        cth = results.chance_to_hit,
+        cths = cths,
+        hits = hits,
+        crit = results.crit and true or nil,
+        dmg = results.total_damage,
+        kills = #(results.killed_units or empty_table),
+        supp = HasSuppressPacket(results, tunit) or nil,
+        mods = mods,
+        ---- what the turn planned at Think time, to compare against the roll
+        plan_cth = plan and plan.cth_plan or nil,
+        plan_tgt = plan and plan.target or nil,
+        ap = ap(unit.ActionPoints)
+    })
+end
+
+function OnMsg.OnAttack(unit, action, target, results, attack_args)
+    if not (g_Combat and ENABLED() and results and IsValid(unit)) then
+        return
+    end
+    local ok, err = pcall(RecordAttack, unit, action, target, results, attack_args)
+    if not ok then
+        Report("OnAttack", err)
+    end
 end
 
 ---------------------------------------------------------------------------------------------------
