@@ -142,7 +142,7 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
     for i, mod in ipairs(results.chance_to_hit_modifiers) do
         local id = mod.id or "Stat"
         if id == "HipshotPenalty" then
-            id = mod.name[2] -- "SnapshotPenalty"
+            id = mod.name and mod.name[2] or id .. "error_no_modname"-- "SnapshotPenalty"
         end
 
         info['CTH_' .. id] = mod.value
