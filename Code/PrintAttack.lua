@@ -70,73 +70,138 @@ function OnMsg.OnAttack(unit, action, target, results, attack_args)
         ['Critical Chance'] = results.crit_chance
     }
 
-    -- CtH de cada tiro em ataques multishot
-    do
-        local function collect_shot_cth(shots)
-            local t = {}
-            for i, shot in ipairs(shots or empty_table) do
-                t[i] = tostring(shot.cth or shot.chance_to_hit or "?")
-            end
-            return t
+    -- shot lists: one per weapon (DualShot has several); melee has no shots, the results are the single "shot"
+    local shot_lists
+    if results.attacks then
+        shot_lists = {}
+        for ai, attack in ipairs(results.attacks) do
+            shot_lists[ai] = attack.shots or empty_table
         end
-        local per_shot
-		local t 
-        if results.attacks then -- multi-weapon (DualShot)
-            local parts = {}
-            for ai, attack in ipairs(results.attacks) do
-                t = collect_shot_cth(attack.shots)
-                if #t > 0 then
-                    parts[#parts + 1] = "w" .. ai .. ": " .. table.concat(t, " | ")
+    elseif results.shots then
+        shot_lists = {results.shots}
+    elseif results.hits then
+        shot_lists = {{results}}
+    else
+        shot_lists = {}
+    end
+
+    -- "a | b | c", or "w1: a | b   w2: c" for multi-weapon attacks
+    local function per_shot(fn)
+        local parts = {}
+        for ai, shots in ipairs(shot_lists) do
+            local t = {}
+            for i, shot in ipairs(shots) do
+                t[i] = fn(shot)
+            end
+            if #t > 0 then
+                local s = table.concat(t, " | ")
+                parts[#parts + 1] = #shot_lists > 1 and ("w" .. ai .. ": " .. s) or s
+            end
+        end
+        return #parts > 0 and table.concat(parts, "   ") or nil
+    end
+
+    local function target_hit(shot)
+        if shot.miss then
+            return
+        end
+        for _, hit in ipairs(shot.hits or empty_table) do
+            if hit.obj == target then
+                return hit
+            end
+        end
+    end
+
+    -- hit.effects may be an array of ids or a set keyed by id
+    local function effect_ids(effects, into)
+        into = into or {}
+        if type(effects) == "string" then
+            if effects ~= "" then
+                table.insert_unique(into, effects)
+            end
+        elseif type(effects) == "table" then
+            for k, v in pairs(effects) do
+                local id = type(k) == "number" and v or k
+                if type(id) == "string" and id ~= "" then
+                    table.insert_unique(into, id)
                 end
             end
-            per_shot = #parts > 0 and table.concat(parts, "   ") or nil
-        else
-            t = collect_shot_cth(results.shots)
-            per_shot = #t > 0 and table.concat(t, " | ") or nil
         end
+        return into
+    end
 
-        if per_shot then
-            info['Chance to Hit per shot'] = per_shot
-            info['Chance to Hit per shot loss'] = results.GBO_debug_cth_loss_per_shot--attack_args and attack_args.cth_loss_per_shot
-			info['Chance to Hit recoil cone ratio mul'] = results.GBO_debug_recoil_cone_ratios
-		end
+    -- CtH de cada tiro em ataques multishot
+    local cth_per_shot = per_shot(function(shot)
+        return tostring(shot.cth or shot.chance_to_hit or "?")
+    end)
+    if cth_per_shot and (results.shots or results.attacks) then
+        info['Chance to Hit per shot'] = cth_per_shot
+        info['Chance to Hit per shot loss'] = results.GBO_debug_cth_loss_per_shot--attack_args and attack_args.cth_loss_per_shot
+        info['Chance to Hit recoil cone ratio mul'] = results.GBO_debug_recoil_cone_ratios
     end
 
     -- aCTH fires a real trajectory: the part hit is not the part aimed at. off-part = soft stray
-    do
-        local function collect_hit_part(shots)
-            local t = {}
-            for i, shot in ipairs(shots or empty_table) do
-                local part, off
-                for _, hit in ipairs(shot.hits or empty_table) do
-                    if hit.obj == target then
-                        part, off = hit.spot_group, hit.rat_offpart
-                        break
-                    end
-                end
-                t[i] = shot.miss and "miss" or
-                           ((part or "?") .. (off and " (off-part)" or ""))
-            end
-            return t
+    local part_per_shot = per_shot(function(shot)
+        if shot.miss then
+            return "miss"
         end
-        local per_shot
-        if results.attacks then
-            local parts = {}
-            for ai, attack in ipairs(results.attacks) do
-                local t = collect_hit_part(attack.shots)
-                if #t > 0 then
-                    parts[#parts + 1] = "w" .. ai .. ": " .. table.concat(t, " | ")
-                end
-            end
-            per_shot = #parts > 0 and table.concat(parts, "   ") or nil
-        else
-            local t = collect_hit_part(results.shots)
-            per_shot = #t > 0 and table.concat(t, " | ") or nil
+        local hit = target_hit(shot)
+        return (hit and hit.spot_group or "?") .. (hit and hit.rat_offpart and " (off-part)" or "")
+    end)
+    if part_per_shot then
+        info['Aimed part'] = attack_args and attack_args.target_spot_group or "Torso (default)"
+        info['Hit part per shot'] = part_per_shot
+    end
+
+    -- outcome on the target: damage, crit/graze and status of each shot
+    local shots_total, hits_on_target, dmg_on_target, crits = 0, 0, 0, 0
+    local statuses = {}
+    local dmg_per_shot = per_shot(function(shot)
+        shots_total = shots_total + 1
+        local hit = target_hit(shot)
+        if not hit then
+            return shot.miss and "miss" or "no target hit"
         end
-        if per_shot then
-            info['Aimed part'] = attack_args and attack_args.target_spot_group or "Torso (default)"
-            info['Hit part per shot'] = per_shot
+        hits_on_target = hits_on_target + 1
+        dmg_on_target = dmg_on_target + (hit.damage or 0)
+        local s = tostring(hit.damage or "?")
+        if hit.critical then
+            crits = crits + 1
+            s = s .. " crit"
         end
+        if hit.grazing then
+            s = s .. " graze" .. (hit.grazing_reason and ("(" .. tostring(hit.grazing_reason) .. ")") or "")
+        end
+        if (hit.armor_prevented or 0) > 0 then
+            s = s .. " armor-" .. hit.armor_prevented
+        end
+        local fx = effect_ids(hit.effects)
+        if #fx > 0 then
+            s = s .. " [" .. table.concat(fx, ",") .. "]"
+            effect_ids(fx, statuses)
+        end
+        return s
+    end)
+    -- statuses that don't ride on a hit (Suppressed, DualShot extras...)
+    for _, packet in ipairs(results.extra_packets or empty_table) do
+        if packet.target == target then
+            effect_ids(packet.effects, statuses)
+        end
+    end
+
+    if dmg_per_shot then
+        info['Damage per shot'] = dmg_per_shot
+    end
+    info['Hits on target'] = hits_on_target .. " / " .. shots_total .. (crits > 0 and (" (" .. crits .. " crit)") or "")
+    info['Damage to target'] = dmg_on_target
+    info['Damage total (all objs)'] = results.total_damage
+    info['Status inflicted'] = #statuses > 0 and table.concat(statuses, ", ") or "none"
+    local killed = {}
+    for _, u in ipairs(results.killed_units or empty_table) do
+        killed[#killed + 1] = tostring(u.session_id or u.class)
+    end
+    if #killed > 0 then
+        info['Killed'] = table.concat(killed, ", ")
     end
 
     for i, mod in ipairs(results.chance_to_hit_modifiers) do

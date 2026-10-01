@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 665,
+	'version', 666,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -34,7 +34,7 @@ return PlaceObj('ModDef', {
 		"Code/RATOARENA_AIvsAI.lua",
 	},
 	'default_options', {},
-	'saved', 1789607412,
-	'code_hash', -4653334410013126479,
+	'saved', 1790727310,
+	'code_hash', -1525879712916604733,
 	'affected_resources', {},
 })
