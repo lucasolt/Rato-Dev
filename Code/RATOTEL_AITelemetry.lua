@@ -461,6 +461,163 @@ local function Breakdown(context, policies, dest)
     return {total = total, parts = parts}
 end
 
+---------------------------------------------------------------------------------------------------
+-- END-TURN CANDIDATES: top scores of the real end-turn pass plus the best tile with a shot, to
+-- answer "why didn't it move to shoot". Kept in the context: it is per unit and per pass.
+---------------------------------------------------------------------------------------------------
+local MAX_CANDS = 3
+
+---- survives a Rato Dev reload: wrapper -> wrapped, so reinstalling never stacks
+Unit.ratotel_wrapped = Unit.ratotel_wrapped or setmetatable({}, {__mode = "k"})
+local wrapped = Unit.ratotel_wrapped
+
+local function unwrap(f)
+    while wrapped[f] do
+        f = wrapped[f]
+    end
+    return f
+end
+
+---- true when ours is anywhere in the chain (the profiler may have wrapped it since)
+local function HasOurs(f)
+    while f do
+        if wrapped[f] then
+            return true
+        end
+        f = nossos[f]
+    end
+end
+
+local WrapScoreDest, WrapReachable
+
+---- Lazy, like the profiler: RATOAI replaces both globals and the load order is not guaranteed.
+local function InstallCandidates()
+    if not HasOurs(AIScoreDest) then
+        WrapScoreDest()
+    end
+    if not HasOurs(AIScoreReachableVoxels) then
+        WrapReachable()
+    end
+end
+
+function WrapScoreDest()
+    local sd = unwrap(AIScoreDest)
+    local sd_w = function(context, policies, dest, grid_voxel, base_score, visual_voxels,
+                          score_details)
+        local v = sd(context, policies, dest, grid_voxel, base_score, visual_voxels, score_details)
+        local c = context.__ratotel_cands
+        if c and dest and v then
+            ---- refinement rescores a dest: replace its entry instead of adding one
+            local slot_i, min_i
+            for i = 1, #c.d do
+                if c.d[i] == dest then
+                    slot_i = i
+                    break
+                end
+                if not min_i or c.s[i] < c.s[min_i] then
+                    min_i = i
+                end
+            end
+            if slot_i then
+                c.s[slot_i] = v
+            elseif #c.d < MAX_CANDS then
+                c.d[#c.d + 1], c.s[#c.s + 1] = dest, v
+            elseif v > c.s[min_i] then
+                c.d[min_i], c.s[min_i] = dest, v
+            end
+        end
+        return v
+    end
+    wrapped[sd_w] = sd
+    AIScoreDest = sd_w
+end
+
+function WrapReachable()
+    local arv = unwrap(AIScoreReachableVoxels)
+    local arv_w = function(context, ...)
+        if not ENABLED() then
+            return arv(context, ...)
+        end
+        local c = {d = {}, s = {}}
+        pcall(function()
+            local action = context.default_attack
+            c.targets = action and #table.ifilter(action:GetTargets({context.unit}), function(_, t)
+                return context.unit:IsOnEnemySide(t)
+            end) or 0
+            c.precalced = context.damage_score_precalced and true or false
+        end)
+        context.__ratotel_cands = c
+        local r = table.pack(arv(context, ...))
+        context.__ratotel_cands = nil
+        context.__ratotel_last = c
+        return table.unpack(r, 1, r.n)
+    end
+    wrapped[arv_w] = arv
+    AIScoreReachableVoxels = arv_w
+end
+
+local function CandInfo(ctx, dest, score)
+    local info = DestInfo(dest)
+    info.score = score
+    info.chosen = dest == ctx.ai_destination or nil
+    local tgt = ctx.dest_target and ctx.dest_target[dest]
+    info.target = IsKindOf(tgt, "Unit") and tgt.session_id or nil
+    info.hit = ctx.dest_hit_score and ctx.dest_hit_score[dest]
+    info.cth = ctx.dest_cth and ctx.dest_cth[dest]
+    info.ap = ap(ctx.dest_ap and ctx.dest_ap[dest])
+    if RECORD_BREAKDOWN then
+        local b = Breakdown(ctx, ctx.behavior and ctx.behavior.EndTurnPolicies, dest)
+        if b and b.total then
+            info.parts = b.parts
+            ---- what the policies don't explain is the distance-to-optimal-location term
+            info.opt = score and score - b.total or nil
+        end
+    end
+    return info
+end
+
+local function SnapshotCandidates(ctx)
+    local c = ctx.__ratotel_last
+    if not c then
+        return nil
+    end
+    local out = {targets = c.targets, precalced = c.precalced, top = {}}
+    local order = {}
+    for i = 1, #c.d do
+        order[i] = i
+    end
+    table.sort(order, function(a, b)
+        return c.s[a] > c.s[b]
+    end)
+    local in_top = {}
+    for _, i in ipairs(order) do
+        out.top[#out.top + 1] = CandInfo(ctx, c.d[i], c.s[i])
+        in_top[c.d[i]] = c.s[i]
+    end
+
+    ---- why no shot: dests that afford the attack, dests with a target, the best of those
+    local cost = ctx.override_attack_cost or ctx.default_attack_cost or 0
+    local n, n_ap, n_tgt, best, best_hit = 0, 0, 0, nil, nil
+    for _, dest in ipairs(ctx.destinations or empty_table) do
+        n = n + 1
+        if (ctx.dest_ap and ctx.dest_ap[dest] or 0) >= cost then
+            n_ap = n_ap + 1
+        end
+        if IsKindOf(ctx.dest_target and ctx.dest_target[dest], "Unit") then
+            n_tgt = n_tgt + 1
+            local h = ctx.dest_hit_score and ctx.dest_hit_score[dest] or 0
+            if not best_hit or h > best_hit then
+                best, best_hit = dest, h
+            end
+        end
+    end
+    out.dests, out.dests_ap, out.dests_target = n, n_ap, n_tgt
+    if best then
+        out.shot = CandInfo(ctx, best, in_top[best])
+    end
+    return out
+end
+
 local function SnapshotBehaviors(debug_data)
     local out = {}
     for _, d in ipairs((debug_data or empty_table).behaviors or empty_table) do
@@ -619,6 +776,9 @@ local function CaptureAfter(unit, rec, status)
         rec.dest_parts = Breakdown(ctx, ctx.behavior and ctx.behavior.EndTurnPolicies,
                                    ctx.ai_destination)
     end
+    if ctx then
+        rec.cands = SnapshotCandidates(ctx)
+    end
 
     Emit(rec)
 end
@@ -651,6 +811,10 @@ function Unit:StartAI(debug_data, forced_behavior)
     ---- passamos um debug_data proprio quando o jogo nao passa nenhum: e a unica
     ---- forma de capturar os scores de behavior, e StartAI so ESCREVE nessa tabela
     local dd = debug_data or {}
+    local ok, err = pcall(InstallCandidates)
+    if not ok then
+        Report("InstallCandidates", err)
+    end
     ---- PROFILER: aqui comeca o raciocinio desta unidade neste turno -- e o unico ponto em que
     ---- ZERAR o bucket faz sentido. O Think vem depois, num laco separado do controlador de
     ---- execucao, e reativa este mesmo bucket.

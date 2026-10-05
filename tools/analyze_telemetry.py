@@ -154,6 +154,12 @@ def turns_report(recs):
         print(f"turns ending with >=40 displayed AP: {len(heavy)}/{len(left)}"
               f" (enemy visible in {sum(1 for r in heavy if r.get('enemies_vis'))});"
               f" by arch {collections.Counter(r.get('arch') for r in heavy).most_common(5)}")
+    C = [r for r in L if r.get("cands") and not r.get("enemies_vis")]
+    if C:
+        no_tgt = [r for r in C if not r["cands"].get("targets")]
+        no_dest = [r for r in C if r["cands"].get("targets") and not r["cands"].get("dests_target")]
+        print(f"turns without own LOS: {len(C)}; no attack targets {len(no_tgt)};"
+              f" targets but no reachable tile with a shot {len(no_dest)}")
     cp = [r["cth_plan"] for r in L if r.get("cth_plan") is not None]
     if cp:
         print(f"planned attack CTH under {LOW_CTH}%: {sum(1 for c in cp if c < LOW_CTH)}/{len(cp)}")
