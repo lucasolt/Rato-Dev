@@ -540,15 +540,23 @@ local function CaptureBefore(unit, rec)
     rec.weapon = ctx.weapon and ctx.weapon.class or nil
     rec.hp = unit.HitPoints
     rec.maxhp = unit.MaxHitPoints
-    rec.ap0 = ap(unit.ActionPoints)
     rec.beh = ctx.behavior and tostring(ctx.behavior:GetEditorView())
     rec.max_atk = ctx.max_attacks
 
-    rec.pos0 = DestInfo(GetPackedPosAndStance(unit))
+    ---- The movement phase (CombatCamera.lua:1199) runs before this call: pos0/ap0 come from
+    ---- StartAI, posm/apm are where the move ended.
+    rec.posm = DestInfo(GetPackedPosAndStance(unit))
+    rec.apm = ap(unit.ActionPoints)
+    rec.pos0 = rec.pos0 or rec.posm
+    rec.ap0 = rec.ap0 or rec.apm
     rec.best = DestInfo(ctx.best_dest)
     rec.best_score = ctx.best_score
     rec.dest = DestInfo(ctx.ai_destination)
     rec.dest_score = ctx.best_end_score
+    if rec.dest and rec.posm then
+        local left = point(rec.dest.x, rec.dest.y):Dist2D(point(rec.posm.x, rec.posm.y))
+        rec.dest_left = left > 0 and slabs(left) or nil
+    end
 
     local d = ctx.ai_destination
     if d then
@@ -650,7 +658,12 @@ function Unit:StartAI(debug_data, forced_behavior)
     local res = orig.StartAI(self, dd, forced_behavior)
     ProfEnd(pprev)
     pcall(function()
-        pending[self] = {ev = "turn", behs = SnapshotBehaviors(dd)}
+        pending[self] = {
+            ev = "turn",
+            behs = SnapshotBehaviors(dd),
+            pos0 = DestInfo(GetPackedPosAndStance(self)),
+            ap0 = ap(self.ActionPoints)
+        }
     end)
     return res
 end
@@ -703,7 +716,7 @@ function AIExecuteUnitBehavior(unit, force_or_skip_action)
         end
         ---- AIExecuteUnitBehavior pode ser reexecutada ("restart"); o proximo passe
         ---- comeca um registro novo, herdando so os scores de behavior
-        pending[unit] = {ev = "turn", behs = rec.behs, run = rec.run}
+        pending[unit] = {ev = "turn", behs = rec.behs, run = rec.run, pos0 = rec.pos1, ap0 = rec.ap1}
     end
 
     return status

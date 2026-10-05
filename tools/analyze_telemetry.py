@@ -128,13 +128,15 @@ def turns_report(recs):
     for r in T:
         last[(r["sess"], r["turn"], r.get("unit"))] = r
     L = list(last.values())
-    # pos0 is captured after the move, so movement is measured turn to turn
+    # records without posm took pos0 after the move, so theirs is measured turn to turn
     prev, moved = {}, []
     for k in sorted(last, key=lambda k: (k[0], k[1] or 0)):
         r = last[k]
         p = r.get("pos1") or r.get("pos0")
         u = (k[0], k[2])
-        if p and u in prev and prev[u][0] == (k[1] or 0) - 1:
+        if "posm" in r and r.get("moved") is not None:
+            moved.append((r["moved"], r))
+        elif p and u in prev and prev[u][0] == (k[1] or 0) - 1:
             a = prev[u][1]
             moved.append((round(math.hypot(p["x"] - a["x"], p["y"] - a["y"]) / 1200), r))
         prev[u] = (k[1] or 0, p)
