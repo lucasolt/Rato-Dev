@@ -490,6 +490,39 @@ end
 
 local WrapScoreDest, WrapReachable
 
+---- Later precalcs (signature scoring, execution) replace dest_hit_score/dest_cth wholesale, so
+---- per-dest data is read when the end-turn pass returns, not after the unit acted.
+local function FreezeCandidates(ctx, c)
+    local function freeze(dest)
+        local tgt = ctx.dest_target and ctx.dest_target[dest]
+        return {
+            target = IsKindOf(tgt, "Unit") and tgt.session_id or nil,
+            hit = ctx.dest_hit_score and ctx.dest_hit_score[dest],
+            cth = ctx.dest_cth and ctx.dest_cth[dest],
+            ap = ap(ctx.dest_ap and ctx.dest_ap[dest])
+        }
+    end
+    c.info = {}
+    for _, dest in ipairs(c.d) do
+        c.info[dest] = freeze(dest)
+    end
+    if c.shot_d then
+        c.info[c.shot_d] = freeze(c.shot_d)
+    end
+    local cost = ctx.override_attack_cost or ctx.default_attack_cost or 0
+    local n, n_ap, n_tgt = 0, 0, 0
+    for _, dest in ipairs(ctx.destinations or empty_table) do
+        n = n + 1
+        if (ctx.dest_ap and ctx.dest_ap[dest] or 0) >= cost then
+            n_ap = n_ap + 1
+        end
+        if IsKindOf(ctx.dest_target and ctx.dest_target[dest], "Unit") then
+            n_tgt = n_tgt + 1
+        end
+    end
+    c.dests, c.dests_ap, c.dests_target = n, n_ap, n_tgt
+end
+
 ---- Lazy, like the profiler: RATOAI replaces both globals and the load order is not guaranteed.
 local function InstallCandidates()
     if not HasOurs(AIScoreDest) then
@@ -525,6 +558,10 @@ function WrapScoreDest()
             elseif v > c.s[min_i] then
                 c.d[min_i], c.s[min_i] = dest, v
             end
+            if IsKindOf(context.dest_target and context.dest_target[dest], "Unit") and
+                (c.shot_d == dest or not c.shot_s or v > c.shot_s) then
+                c.shot_d, c.shot_s = dest, v
+            end
         end
         return v
     end
@@ -550,21 +587,22 @@ function WrapReachable()
         local r = table.pack(arv(context, ...))
         context.__ratotel_cands = nil
         context.__ratotel_last = c
+        local ok, err = pcall(FreezeCandidates, context, c)
+        if not ok then
+            Report("FreezeCandidates", err)
+        end
         return table.unpack(r, 1, r.n)
     end
     wrapped[arv_w] = arv
     AIScoreReachableVoxels = arv_w
 end
 
-local function CandInfo(ctx, dest, score)
+local function CandInfo(ctx, c, dest, score)
     local info = DestInfo(dest)
     info.score = score
     info.chosen = dest == ctx.ai_destination or nil
-    local tgt = ctx.dest_target and ctx.dest_target[dest]
-    info.target = IsKindOf(tgt, "Unit") and tgt.session_id or nil
-    info.hit = ctx.dest_hit_score and ctx.dest_hit_score[dest]
-    info.cth = ctx.dest_cth and ctx.dest_cth[dest]
-    info.ap = ap(ctx.dest_ap and ctx.dest_ap[dest])
+    local f = c.info and c.info[dest] or empty_table
+    info.target, info.hit, info.cth, info.ap = f.target, f.hit, f.cth, f.ap
     if RECORD_BREAKDOWN then
         local b = Breakdown(ctx, ctx.behavior and ctx.behavior.EndTurnPolicies, dest)
         if b and b.total then
@@ -581,7 +619,14 @@ local function SnapshotCandidates(ctx)
     if not c then
         return nil
     end
-    local out = {targets = c.targets, precalced = c.precalced, top = {}}
+    local out = {
+        targets = c.targets,
+        precalced = c.precalced,
+        dests = c.dests,
+        dests_ap = c.dests_ap,
+        dests_target = c.dests_target,
+        top = {}
+    }
     local order = {}
     for i = 1, #c.d do
         order[i] = i
@@ -589,31 +634,12 @@ local function SnapshotCandidates(ctx)
     table.sort(order, function(a, b)
         return c.s[a] > c.s[b]
     end)
-    local in_top = {}
     for _, i in ipairs(order) do
-        out.top[#out.top + 1] = CandInfo(ctx, c.d[i], c.s[i])
-        in_top[c.d[i]] = c.s[i]
+        out.top[#out.top + 1] = CandInfo(ctx, c, c.d[i], c.s[i])
     end
-
-    ---- why no shot: dests that afford the attack, dests with a target, the best of those
-    local cost = ctx.override_attack_cost or ctx.default_attack_cost or 0
-    local n, n_ap, n_tgt, best, best_hit = 0, 0, 0, nil, nil
-    for _, dest in ipairs(ctx.destinations or empty_table) do
-        n = n + 1
-        if (ctx.dest_ap and ctx.dest_ap[dest] or 0) >= cost then
-            n_ap = n_ap + 1
-        end
-        if IsKindOf(ctx.dest_target and ctx.dest_target[dest], "Unit") then
-            n_tgt = n_tgt + 1
-            local h = ctx.dest_hit_score and ctx.dest_hit_score[dest] or 0
-            if not best_hit or h > best_hit then
-                best, best_hit = dest, h
-            end
-        end
-    end
-    out.dests, out.dests_ap, out.dests_target = n, n_ap, n_tgt
-    if best then
-        out.shot = CandInfo(ctx, best, in_top[best])
+    ---- best end-turn score among tiles with a target
+    if c.shot_d then
+        out.shot = CandInfo(ctx, c, c.shot_d, c.shot_s)
     end
     return out
 end
