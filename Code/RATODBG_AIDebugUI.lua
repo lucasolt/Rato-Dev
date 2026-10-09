@@ -1860,6 +1860,7 @@ local function MemoryRows(unit, ctx)
                 revealed = table.find(revealed, enemy) and true or false,
                 mem = MemPoint(mem),
                 age = age,
+                heading = mem and (RATOAI_LastSeen[unit.team.side] or empty_table)[enemy].heading,
                 believed = believed[enemy]
             }
             if mem then
@@ -1903,6 +1904,11 @@ function IModeAIDebug:DrawMemoryLayer()
         local name = string.format("#%s %s", row.idx or "?", row.enemy.session_id)
         if row.mem then
             fx[#fx + 1] = PlaceScaledSquareFX(10 * guic, row.mem, color, RING_SCALE)
+            if row.heading then
+                ---- arrow: the way he was moving when last seen
+                local tip = row.mem + Rotate(point(MulDivRound(const.SlabSizeX, 3, 2), 0, 0), row.heading)
+                fx[#fx + 1] = PlaceLineFX(row.mem:AddZ(INFL_Z_TILE), tip:AddZ(INFL_Z_TILE), color)
+            end
             fx[#fx + 1] = PlaceTextFx(string.format("%s  mem %s %dt%s", name, row.state, row.age,
                                                     row.sees and " (visto)" or ""),
                                       row.mem:AddZ(MEM_Z_LABEL), color)
