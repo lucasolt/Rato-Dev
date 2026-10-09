@@ -946,6 +946,31 @@ local function HasSuppressPacket(results, target)
     end
 end
 
+---- AI shots only: GBO3's muzzle ring (Rat_MuzzleClearance), and where each blocked ray stopped.
+---- `ground` = the stop is on the terrain surface, i.e. the ring clipped the ground, not an object.
+local GROUND_TOLERANCE = 15 * guic
+
+local function MuzzleInfo(unit, target, weapon, part)
+    if not (Rat_MuzzleClearance and IsKindOf(weapon, "Firearm") and IsKindOf(target, "Unit")) then
+        return nil
+    end
+    local rays = {}
+    local pct = Rat_MuzzleClearance(unit, target, unit:GetPos(), target:GetPos(), weapon, unit.stance,
+                                    rays, "force", part)
+    local out = {pct = pct}
+    if pct < 100 then
+        out.blocked = {}
+        for _, r in ipairs(rays) do
+            if not r.reached and r.stuck then
+                local x, y, z = r.stuck:xyz()
+                local ground = z and abs(z - terrain.GetHeight(x, y)) <= GROUND_TOLERANCE or nil
+                out.blocked[#out.blocked + 1] = {cm = r.from:Dist(r.stuck) / guic, ground = ground}
+            end
+        end
+    end
+    return out
+end
+
 local function RecordAttack(unit, action, target, results, attack_args)
     local weapon = results.weapon
     if not IsKindOfClasses(weapon, "Firearm", "MeleeWeapon") then
@@ -980,13 +1005,22 @@ local function RecordAttack(unit, action, target, results, attack_args)
         tpos = tpos:SetTerrainZ()
     end
     local ctx = unit.ai_context
+    local is_ai = unit.team and unit.team.control == "AI"
+    local muzzle
+    if is_ai and tunit then
+        local ok, m = pcall(MuzzleInfo, unit, tunit, weapon, attack_args and attack_args.target_spot_group)
+        muzzle = ok and m or nil
+        if not ok then
+            Report("MuzzleInfo", m)
+        end
+    end
     local own = g_Teams[g_CurrentTeam] == unit.team
     local plan = own and pending[unit]
     Emit({
         ev = "attack",
         unit = unit.session_id,
         side = unit.team and unit.team.side,
-        ai = (unit.team and unit.team.control == "AI") or nil,
+        ai = is_ai or nil,
         arch = ctx and ctx.archetype and ctx.archetype.id or nil,
         role = unit.custom_role or unit.role or nil,
         action = action and action.id,
@@ -1007,6 +1041,7 @@ local function RecordAttack(unit, action, target, results, attack_args)
         kills = #(results.killed_units or empty_table),
         supp = HasSuppressPacket(results, tunit) or nil,
         mods = mods,
+        muzzle = muzzle,
         ---- what the turn planned at Think time, to compare against the roll
         plan_cth = plan and plan.cth_plan or nil,
         plan_tgt = plan and plan.target or nil,

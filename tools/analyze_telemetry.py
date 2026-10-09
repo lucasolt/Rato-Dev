@@ -106,6 +106,14 @@ def attacks_report(atks):
             if planned:
                 d = [a["cth"] - a["plan_cth"] for a in planned]
                 print(f"plan vs roll CTH (own turn): mean delta {st.mean(d):+.1f}, |delta|>15 in {sum(1 for x in d if abs(x) > 15)}/{len(d)}")
+        M = [a for a in L if a.get("muzzle")]
+        if M:
+            clipped = [a for a in M if a["muzzle"]["pct"] < 100]
+            rays = [r for a in clipped for r in a["muzzle"].get("blocked") or []]
+            print(f"muzzle ring clipped {len(clipped)}/{len(M)} shots"
+                  f" (by stance {dict(collections.Counter(a.get('stance') for a in clipped))});"
+                  f" blocked rays {len(rays)}, on terrain {sum(1 for r in rays if r.get('ground'))},"
+                  f" median stop {st.median(r['cm'] for r in rays) if rays else '-'} cm")
         print("low-CTH actions:", collections.Counter(a["action"] for a in low).most_common(6))
         print("low-CTH weapons:", collections.Counter(a.get("weapon") for a in low).most_common(8))
         worst = collections.defaultdict(list)
