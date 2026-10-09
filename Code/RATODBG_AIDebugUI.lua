@@ -1866,10 +1866,15 @@ local function MemoryRows(unit, ctx)
             if mem then
                 if turns <= 0 or age >= turns then
                     row.state = "expirada"
-                elseif ctx and RATOAI_ThreatMemoryStale(ctx, enemy, mem) then
-                    row.state = "desmentida"
                 else
-                    row.state = "viva"
+                    local belief = ctx and RATOAI_MemoryBelief(ctx, enemy, mem)
+                    if ctx and not belief then
+                        row.state = "desmentida"
+                    elseif belief and belief ~= mem then
+                        row.state = "projetada"
+                    else
+                        row.state = "viva"
+                    end
                 end
             end
             rows[#rows + 1] = row
@@ -1922,7 +1927,8 @@ function IModeAIDebug:DrawMemoryLayer()
         local b = row.believed
         if b and b.pos and not (row.mem and IsCloser(b.pos, row.mem, const.SlabSizeX / 2)) then
             fx[#fx + 1] = PlaceScaledSquareFX(15 * guic, b.pos, color)
-            fx[#fx + 1] = PlaceTextFx(string.format("%s  crenca %d%% (suspeita)", name, b.pct),
+            fx[#fx + 1] = PlaceTextFx(string.format("%s  crenca %d%% (%s)", name, b.pct,
+                                                    row.state == "projetada" and "projetada" or "suspeita"),
                                       b.pos:AddZ(MEM_Z_LABEL + 30 * guic), color)
         end
     end
