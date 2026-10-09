@@ -554,13 +554,19 @@ function WrapScoreDest()
             if slot_i then
                 c.s[slot_i] = v
             elseif #c.d < MAX_CANDS then
-                c.d[#c.d + 1], c.s[#c.s + 1] = dest, v
+                slot_i = #c.d + 1
+                c.d[slot_i], c.s[slot_i] = dest, v
             elseif v > c.s[min_i] then
-                c.d[min_i], c.s[min_i] = dest, v
+                slot_i = min_i
+                c.d[slot_i], c.s[slot_i] = dest, v
+            end
+            ---- base_score is the distance-to-optimal term of this very call
+            if slot_i then
+                c.b[slot_i] = base_score
             end
             if IsKindOf(context.dest_target and context.dest_target[dest], "Unit") and
                 (c.shot_d == dest or not c.shot_s or v > c.shot_s) then
-                c.shot_d, c.shot_s = dest, v
+                c.shot_d, c.shot_s, c.shot_b = dest, v, base_score
             end
         end
         return v
@@ -575,7 +581,7 @@ function WrapReachable()
         if not ENABLED() then
             return arv(context, ...)
         end
-        local c = {d = {}, s = {}}
+        local c = {d = {}, s = {}, b = {}}
         pcall(function()
             local action = context.default_attack
             c.targets = action and #table.ifilter(action:GetTargets({context.unit}), function(_, t)
@@ -597,18 +603,18 @@ function WrapReachable()
     AIScoreReachableVoxels = arv_w
 end
 
-local function CandInfo(ctx, c, dest, score)
+local function CandInfo(ctx, c, dest, score, base)
     local info = DestInfo(dest)
     info.score = score
+    info.opt = base
     info.chosen = dest == ctx.ai_destination or nil
     local f = c.info and c.info[dest] or empty_table
     info.target, info.hit, info.cth, info.ap = f.target, f.hit, f.cth, f.ap
     if RECORD_BREAKDOWN then
         local b = Breakdown(ctx, ctx.behavior and ctx.behavior.EndTurnPolicies, dest)
+        ---- recomputed after the unit acted: damage parts may reflect later precalcs, opt is exact
         if b and b.total then
             info.parts = b.parts
-            ---- what the policies don't explain is the distance-to-optimal-location term
-            info.opt = score and score - b.total or nil
         end
     end
     return info
@@ -635,11 +641,11 @@ local function SnapshotCandidates(ctx)
         return c.s[a] > c.s[b]
     end)
     for _, i in ipairs(order) do
-        out.top[#out.top + 1] = CandInfo(ctx, c, c.d[i], c.s[i])
+        out.top[#out.top + 1] = CandInfo(ctx, c, c.d[i], c.s[i], c.b[i])
     end
     ---- best end-turn score among tiles with a target
     if c.shot_d then
-        out.shot = CandInfo(ctx, c, c.shot_d, c.shot_s)
+        out.shot = CandInfo(ctx, c, c.shot_d, c.shot_s, c.shot_b)
     end
     return out
 end
