@@ -1818,6 +1818,155 @@ function IModeAIDebug:DrawInfluenceLines()
 end
 
 ---------------------------------------------------------------------------------------------------
+-- MEMORIA -- onde a equipe da unidade selecionada acha que cada inimigo esta
+--
+-- Le as mesmas fontes que a IA: RATOAI_LastSeen (memoria da equipe, com idade), o
+-- last_known_enemy_pos da unidade, o alvo de busca do scout e RATOAI_BelievedEnemies (o que a
+-- ThreatExposure e o scout de fato usam). A linha cinza vai da memoria a posicao REAL: e
+-- conhecimento de desenvolvedor, a IA nao a ve.
+---------------------------------------------------------------------------------------------------
+local MEM_Z_LABEL = 150 * guic
+local MEM_CLR_REAL = RGB(150, 150, 150)
+local MEM_CLR_LK = RGB(255, 255, 255)
+local MEM_CLR_SCOUT = RGB(255, 225, 70)
+
+local function MemPoint(packed)
+    return packed and InflValidZ(RATOAI_UnpackPos(packed))
+end
+
+---- uma linha por inimigo vivo do outro lado: o que a equipe ve, lembra e acredita
+local function MemoryRows(unit, ctx)
+    local rows = {}
+    local team = unit and unit.team
+    if not team then
+        return rows
+    end
+    local vis = g_Visibility and g_Visibility[team] or empty_table
+    local revealed = g_RevealedUnits and g_RevealedUnits[team] or empty_table
+    local believed = {}
+    if ctx then
+        for _, b in ipairs(RATOAI_BelievedEnemies(ctx)) do
+            believed[b.enemy] = b
+        end
+    end
+    local turns = const.RATOAI.ThreatMemoryTurns or 0
+    for _, enemy in ipairs(GetAllEnemyUnits(unit)) do
+        if IsValid(enemy) and not enemy:IsDead() then
+            local mem, age = RATOAI_LastSeenPos(unit, enemy)
+            local row = {
+                enemy = enemy,
+                idx = ctx and TargetIndex(ctx, enemy),
+                sees = (vis[enemy] or 0) >= const.uvVisible,
+                revealed = table.find(revealed, enemy) and true or false,
+                mem = MemPoint(mem),
+                age = age,
+                believed = believed[enemy]
+            }
+            if mem then
+                if turns <= 0 or age >= turns then
+                    row.state = "expirada"
+                elseif ctx and RATOAI_ThreatMemoryStale(ctx, enemy, mem) then
+                    row.state = "desmentida"
+                else
+                    row.state = "viva"
+                end
+            end
+            rows[#rows + 1] = row
+        end
+    end
+    return rows
+end
+
+function IModeAIDebug:ClearMemoryFx()
+    for _, fx in ipairs(self.ratodbg_mem_fx or empty_table) do
+        DoneObject(fx)
+    end
+    self.ratodbg_mem_fx = nil
+end
+
+function IModeAIDebug:ToggleMemoryLayer()
+    self.ratodbg_mem_on = not self.ratodbg_mem_on
+    self:DrawMemoryLayer()
+    self:Update()
+end
+
+function IModeAIDebug:DrawMemoryLayer()
+    self:ClearMemoryFx()
+    local unit = self.selected_unit
+    if not self.ratodbg_mem_on or not IsValid(unit) then
+        return
+    end
+    local ctx = self.ai_context
+    local fx = {}
+    for _, row in ipairs(MemoryRows(unit, ctx)) do
+        local color = TargetColor(row.idx)
+        local name = string.format("#%s %s", row.idx or "?", row.enemy.session_id)
+        if row.mem then
+            fx[#fx + 1] = PlaceScaledSquareFX(10 * guic, row.mem, color, RING_SCALE)
+            fx[#fx + 1] = PlaceTextFx(string.format("%s  mem %s %dt%s", name, row.state, row.age,
+                                                    row.sees and " (visto)" or ""),
+                                      row.mem:AddZ(MEM_Z_LABEL), color)
+            local real = InflValidZ(row.enemy:GetPos())
+            if not IsCloser2D(real, row.mem, const.SlabSizeX / 2) then
+                fx[#fx + 1] = PlaceLineFX(row.mem:AddZ(INFL_Z_TILE), real:AddZ(INFL_Z_ENEMY), MEM_CLR_REAL)
+                fx[#fx + 1] = PlaceTextFx(string.format("real (%dt)", row.mem:Dist(real) / const.SlabSizeX),
+                                          real:AddZ(INFL_Z_ENEMY + 20 * guic), MEM_CLR_REAL)
+            end
+        end
+        local b = row.believed
+        if b and b.pos and not (row.mem and IsCloser(b.pos, row.mem, const.SlabSizeX / 2)) then
+            fx[#fx + 1] = PlaceScaledSquareFX(15 * guic, b.pos, color)
+            fx[#fx + 1] = PlaceTextFx(string.format("%s  crenca %d%% (suspeita)", name, b.pct),
+                                      b.pos:AddZ(MEM_Z_LABEL + 30 * guic), color)
+        end
+    end
+    local lk = unit.last_known_enemy_pos
+    if lk then
+        lk = InflValidZ(lk)
+        fx[#fx + 1] = PlaceScaledSquareFX(20 * guic, lk, MEM_CLR_LK, RING_SCALE + 40)
+        fx[#fx + 1] = PlaceTextFx("last_known (unidade)", lk:AddZ(MEM_Z_LABEL + 60 * guic), MEM_CLR_LK)
+        fx[#fx + 1] = PlaceLineFX(InflValidZ(unit:GetPos()):AddZ(INFL_Z_TILE), lk:AddZ(INFL_Z_TILE), MEM_CLR_LK)
+    end
+    local scout = RATOAI_PickRememberedScoutPos(unit)
+    if scout and not (lk and IsCloser2D(scout, lk, const.SlabSizeX / 2)) then
+        scout = InflValidZ(scout)
+        fx[#fx + 1] = PlaceScaledSquareFX(25 * guic, scout, MEM_CLR_SCOUT, RING_SCALE + 40)
+        fx[#fx + 1] = PlaceTextFx("alvo scout (memoria)", scout:AddZ(MEM_Z_LABEL + 90 * guic), MEM_CLR_SCOUT)
+    end
+    self.ratodbg_mem_fx = fx
+end
+
+local function MemoryPanel(self, text)
+    local on = self.ratodbg_mem_on
+    text = text .. "\n\n<color 255 225 70>Memoria</color> (equipe da unidade): " ..
+               link("ToggleMemoryLayer", nil, on and "[desenhar]" or "desenhar", 255, 225, 70)
+    local rows = MemoryRows(self.selected_unit, self.ai_context)
+    for _, row in ipairs(rows) do
+        local clr = TargetColor(row.idx)
+        local r, g, b = GetRGB(clr)
+        local parts = {row.sees and "<color 0 255 0>ve</color>" or "<color 255 120 120>nao ve</color>"}
+        if row.revealed then
+            parts[#parts + 1] = "revelado"
+        end
+        if row.mem then
+            parts[#parts + 1] = string.format("mem %s %dt", row.state, row.age)
+        else
+            parts[#parts + 1] = "<color 120 120 120>nunca visto</color>"
+        end
+        if row.believed then
+            parts[#parts + 1] = string.format("crenca %d%%", row.believed.pct)
+        end
+        text = text .. string.format("\n  <color %d %d %d>#%s %s</color>: %s", r, g, b, row.idx or "?",
+                                     row.enemy.session_id, table.concat(parts, " | "))
+    end
+    if #rows > 0 then
+        text = text .. "\n  <color 120 120 120>ve = g_Visibility da equipe; pode estar velho depois" ..
+                   " de um Start AI pelo painel</color>"
+    end
+    return text
+end
+
+---------------------------------------------------------------------------------------------------
 -- Ganchos
 --
 -- OnMousePos so redesenha quando o voxel MUDA. O original retorna cedo quando e o mesmo
@@ -1848,6 +1997,7 @@ end
 IModeAIDebug.RATODBG_Orig_Done = IModeAIDebug.RATODBG_Orig_Done or IModeAIDebug.Done
 function IModeAIDebug:Done(...)
     self:ClearInfluenceFx()
+    self:ClearMemoryFx()
     return IModeAIDebug.RATODBG_Orig_Done(self, ...)
 end
 
@@ -1899,6 +2049,7 @@ function IModeAIDebug:Process(unit)
     if self.dbg_influence then
         self:DrawInfluenceLines()
     end
+    self:DrawMemoryLayer()
 end
 
 local function PageCamadas(self, text)
@@ -1974,6 +2125,8 @@ local function PageCamadas(self, text)
     end
     text = text .. "\n   <color 120 120 120>bruta + cancelada = liquido | valores ja com" ..
                " o Weight | linhas somam o numero do tile</color>"
+
+    text = MemoryPanel(self, text)
 
     text = text .. "\n\n<color 255 160 60>Alvo</color> (por tile alcancavel):"
     text = text .. "\n" .. link("ShowAIVoxels", "target_who", "Quem seria o alvo")
