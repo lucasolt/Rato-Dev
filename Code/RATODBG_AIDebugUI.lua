@@ -2897,3 +2897,57 @@ function IModeAIDebug:OnMouseButtonDown(pt, button)
     end
     return IModeAIDebug.ratodbg_orig.OnMouseButtonDown(self, pt, button)
 end
+
+---------------------------------------------------------------------------------------------------
+-- RAIO-X DE INIMIGOS: marca toda unidade hostil que o jogador NAO ve, so desenhando. Nao usa o
+-- cheat FullVisibility: ele liga unit.visible, que o step-out de overwatch (RATOAI) e o
+-- NoRevealMemory/BlindRunAndGun (GBO3) leem -- mudaria o comportamento sendo depurado.
+-- Console: RATODBG_ShowEnemies() alterna; RATODBG_ShowEnemies(true/false) forca.
+---------------------------------------------------------------------------------------------------
+local XRAY_CLR = RGB(255, 60, 200)
+local xray_on, xray_fx = false, {}
+
+local function ClearXRay()
+    for _, fx in ipairs(xray_fx) do
+        if IsValid(fx) then
+            DoneObject(fx)
+        end
+    end
+    xray_fx = {}
+end
+
+local function DrawXRay()
+    ClearXRay()
+    for _, u in ipairs(g_Units) do
+        local side = IsValid(u) and not u:IsDead() and not u.visible and u.team and u.team.side
+        if side and side ~= "player1" and side ~= "player2" and side ~= "neutral" then
+            local pos = u:GetVisualPos()
+            pos = pos:IsValidZ() and pos or pos:SetTerrainZ()
+            local id = tostring(u.session_id or u.unitdatadef_id):match("[^:]+:%d+$") or u.session_id
+            xray_fx[#xray_fx + 1] = PlaceScaledSquareFX(10 * guic, pos, XRAY_CLR)
+            xray_fx[#xray_fx + 1] = PlaceTextFx(string.format("%s  %s  %dAP", tostring(id),
+                tostring(u.current_archetype or "-"), (u.ActionPoints or 0) / const.Scale.AP),
+                pos:AddZ(220 * guic), XRAY_CLR)
+        end
+    end
+end
+
+function RATODBG_ShowEnemies(on)
+    if on == nil then
+        on = not xray_on
+    end
+    if on == xray_on then
+        return xray_on
+    end
+    xray_on = on
+    if on then
+        CreateRealTimeThread(function()
+            while xray_on do
+                DrawXRay()
+                Sleep(200)
+            end
+            ClearXRay()
+        end)
+    end
+    return xray_on
+end
