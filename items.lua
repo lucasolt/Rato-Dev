@@ -109,4 +109,8 @@ return {
 		'name', "RATOARENA_AIvsAI",
 		'CodeFileName', "Code/RATOARENA_AIvsAI.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "RATOWEP_WeaponPicker",
+		'CodeFileName', "Code/RATOWEP_WeaponPicker.lua",
+	}),
 }

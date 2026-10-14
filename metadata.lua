@@ -32,6 +32,7 @@ return PlaceObj('ModDef', {
 		"Code/RATOTEL_AITelemetry.lua",
 		"Code/ZulibReloadFix.lua",
 		"Code/RATOARENA_AIvsAI.lua",
+		"Code/RATOWEP_WeaponPicker.lua",
 	},
 	'default_options', {},
 	'saved', 1790727310,
