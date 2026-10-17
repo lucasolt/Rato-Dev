@@ -96,7 +96,14 @@ local magazineData = {
     -- {id = "AR10std", magsize = 20, mag_mod = "MagNormal", ancestor_id = "FNFALMagazine"},
     ---- ext_comp: the extended component when its id has no "ext" in it
     {id = "A91_2", magsize = 30, mag_mod = "MagNormal", ancestor_id = "AK74Magazine", generate_extended = true},
-    {id = "G11_1", magsize = 45, mag_mod = "MagNormal", ancestor_id = "AUGMagazine", generate_extended = true},
+    {
+        id = "G11_1",
+        magsize = 45,
+        mag_mod = "MagNormal",
+        ancestor_id = "AUGMagazine",
+        generate_extended = true,
+        drum = {comp = "G11_Mag_ext2_1", ancestor_id = "G36MagazineLarger"}
+    },
     {
         id = "M24Sniper",
         magsize = 5,
@@ -141,7 +148,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
                                        shared_weapons_id_table, generate_extended,
                                        extended_custom_icon, InventoryItem_table,
                                        WeaponComponentVisual_table, RevMagWeaponSetup_table,
-                                       PosClass_table, ext_comp)
+                                       PosClass_table, ext_comp, drum)
     local w = g_Classes[id]
 
     local slots = w.ComponentSlots
@@ -194,8 +201,8 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
     local ancestor = g_Classes[ancestor_id]
 
     local cal = FindPreset("Caliber", w.Caliber)
-    cal = cal and cal.Name[2] or ""
-    local wepname = w.DisplayName[2]
+    cal = cal and (cal.Name[2] or _InternalTranslate(cal.Name)) or ""
+    local wepname = w.DisplayName[2] or _InternalTranslate(w.DisplayName)
 
     ----- Helpers
 
@@ -434,6 +441,33 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
         table.insert(possible_mods, ex_mag_mod)
     end
 
+    ---- drum = {comp = component id, ancestor_id = class}: a third size, inserted as MagLarger
+    local drum_comp = drum and WeaponComponents[drum.comp]
+    if drum_comp then
+        local drum_ancestor = g_Classes[drum.ancestor_id] or ancestor
+        local entity_d, icon_d = get_entity_and_icon(drum_comp, drum.custom_icon)
+        local mul = 300
+        for _, param in ipairs(drum_comp.Parameters or empty_table) do
+            if param.Name == "MagazineSizeMultiplier" then
+                mul = param.Value
+                break
+            end
+        end
+        local drum_id = id .. "_MagazineLarger"
+        local drum_tabua = generate_tabua(drum_id, "LargeMag", icon_d,
+                                          "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazine')",
+                                          "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazines')",
+                                          "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazine for " ..
+                                              cal .. " rounds')", add_hint, platform,
+                                          MulDivRound(magsize, mul, 100), cal, "MagLarger", drum_ancestor)
+        table.insert(InventoryItem_table, generate_class_code(drum_tabua))
+        table.insert(PosClass_table, drum_id)
+        WeaponComponentVisual_table.MagLarger = WeaponComponentVisual_table.MagLarger or {}
+        table.insert(WeaponComponentVisual_table.MagLarger,
+                     generate_visual_code(generate_visual_tabua(id, entity_d, icon_d)))
+        table.insert(possible_mods, "MagLarger")
+    end
+
     -- Add REV_SetupWeapon message for the main item and extended mods if any
     local setup_message = generate_setup_message(id, platform, mag_item_id, possible_mods)
     table.insert(RevMagWeaponSetup_table, setup_message)
@@ -458,7 +492,7 @@ function rat_buildmags()
                                 v.shared_weapons_id_table, v.generate_extended,
                                 v.extended_custom_icon, InventoryItem_table,
                                 WeaponComponentVisual_table, RevMagWeaponSetup_table, PosClass_table,
-                                v.ext_comp)
+                                v.ext_comp, v.drum)
     end
 
     -- Print the REV_SetupWeapon messages
