@@ -390,7 +390,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
                                       displayNamePlural_ex, description_ex, add_hint, platform,
                                       ex_magsize, cal, ex_mag_mod, ex_ancestor)
             ex_visual_tabua = generate_visual_tabua(id, entity_ex, icon_ex)
-            table.insert(PosClass_table, ext_mag_id)
+            table.insert(PosClass_table, mag_item_id_ex)
         end
     end
 
