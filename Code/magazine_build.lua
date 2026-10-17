@@ -93,7 +93,18 @@ local magazineData = {
     --     ancestor_id = "MP40Magazine",
     --     custom_icon = 'Mod/Dau6w/Images/UMP_mag_def.png'
     -- },
-    {id = "AR10std", magsize = 20, mag_mod = "MagNormal", ancestor_id = "FNFALMagazine"}
+    -- {id = "AR10std", magsize = 20, mag_mod = "MagNormal", ancestor_id = "FNFALMagazine"},
+    ---- ext_comp: the extended component when its id has no "ext" in it
+    {id = "A91_2", magsize = 30, mag_mod = "MagNormal", ancestor_id = "AK74Magazine", generate_extended = true},
+    {id = "G11_1", magsize = 45, mag_mod = "MagNormal", ancestor_id = "AUGMagazine", generate_extended = true},
+    {
+        id = "M24Sniper",
+        magsize = 5,
+        mag_mod = "MagNormal",
+        ancestor_id = "M14Magazine",
+        generate_extended = true,
+        ext_comp = "MagLarge"
+    }
 
 }
 
@@ -130,7 +141,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
                                        shared_weapons_id_table, generate_extended,
                                        extended_custom_icon, InventoryItem_table,
                                        WeaponComponentVisual_table, RevMagWeaponSetup_table,
-                                       PosClass_table)
+                                       PosClass_table, ext_comp)
     local w = g_Classes[id]
 
     local slots = w.ComponentSlots
@@ -153,6 +164,8 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
     local function get_entity_and_icon(component, custom_icon_override)
         local entity, icon
         local visual = component.Visuals[table.find(component.Visuals, "ApplyTo", id)]
+        ---- ToG mag components often carry one generic visual (ApplyTo false) instead of one per gun
+        visual = visual or component.Visuals[table.find(component.Visuals, "ApplyTo", false)]
         if visual then
             entity = visual.Entity
             icon = visual.Icon
@@ -349,7 +362,8 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
           ex_magsize
 
     if generate_extended then
-        for i, v in ipairs(comp.AvailableComponents) do
+        ext_mag_id = ext_comp
+        for i, v in ipairs(ext_comp and empty_table or comp.AvailableComponents) do
             if string.find(v, "ext") then
                 ext_mag_id = v
                 break
@@ -443,7 +457,8 @@ function rat_buildmags()
         BuildMagazineItemRATRVE(v.id, v.magsize, v.mag_mod, v.ancestor_id, v.custom_icon,
                                 v.shared_weapons_id_table, v.generate_extended,
                                 v.extended_custom_icon, InventoryItem_table,
-                                WeaponComponentVisual_table, RevMagWeaponSetup_table, PosClass_table)
+                                WeaponComponentVisual_table, RevMagWeaponSetup_table, PosClass_table,
+                                v.ext_comp)
     end
 
     -- Print the REV_SetupWeapon messages
