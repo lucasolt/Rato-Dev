@@ -325,8 +325,30 @@ local function row_default(r, col)
     return r.default and r.default[col[1]]
 end
 
+-- columns are one multi-line XText each, so the hovered row is found from the cursor's y
+local function UpdateHover(dlg, pt)
+    local hl, first, list_box = dlg.idHover, dlg.idCol1, dlg.idListBox
+    local n = rawget(dlg, "rat_nrows") or 0
+    rawset(dlg, "rat_last_pt", pt)
+    local cb = first and first.content_box
+    if not (hl and pt and cb and n > 0 and list_box.box:Point2DInside(pt)) then
+        if hl then hl:SetVisible(false) end
+        return
+    end
+    local line_h = cb:sizey() / n
+    local idx = line_h > 0 and (pt:y() - cb:miny()) / line_h or -1
+    if idx < 0 or idx >= n then
+        hl:SetVisible(false)
+        return
+    end
+    local area = dlg.idSheet.content_box
+    hl:SetBox(area:minx(), cb:miny() + idx * line_h, area:sizex(), line_h)
+    hl:SetVisible(true)
+end
+
 local function Render(dlg)
     local rows = VisibleRows()
+    rawset(dlg, "rat_nrows", #rows)
     for i, col in ipairs(Columns) do
         local lo, hi
         if not col.text then
@@ -437,7 +459,7 @@ local function Build()
         Padding = box(10, 8, 10, 8),
         LayoutMethod = "VList",
         LayoutVSpacing = 6,
-        Background = RGBA(12, 12, 12, 235),
+        Background = RGBA(12, 12, 12, 250),
         HandleMouse = true,
         ZOrder = 1000,
     }, terminal.desktop)
@@ -508,7 +530,14 @@ local function Build()
         :SetTextColor(RGB(200, 180, 120))
 
     local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap, Background = RGBA(30, 30, 30, 255)}, dlg)
-    local list_box = XWindow:new({}, dlg)
+    local list_box = XWindow:new({Id = "idListBox", Clip = "self"}, dlg)
+    XWindow:new({
+        Id = "idHover",
+        Dock = "ignore",
+        Background = RGBA(230, 200, 120, 60),
+        HandleMouse = false,
+        Visible = false,
+    }, list_box)
     XSleekScroll:new({Id = "idSheetScroll", Target = "idSheet", Dock = "right", Margins = box(4, 0, 0, 0), AutoHide = true}, list_box)
     local area = XScrollArea:new({
         Id = "idSheet",
@@ -557,6 +586,18 @@ local function Build()
             WordWrap = false,
             Clip = "self",
         }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
+    end
+    dlg.OnMousePos = function(self, pt)
+        UpdateHover(self, pt)
+    end
+    dlg.OnMouseLeft = function(self, pt, child)
+        UpdateHover(self, false)
+        return XWindow.OnMouseLeft(self, pt, child)
+    end
+    area.DoScroll = function(self, x, y)
+        local ret = XScrollArea.DoScroll(self, x, y)
+        UpdateHover(dlg, rawget(dlg, "rat_last_pt"))
+        return ret
     end
     dlg:Open()
     search:SetFocus()
