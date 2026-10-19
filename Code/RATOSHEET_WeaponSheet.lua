@@ -4,10 +4,13 @@
 local sheet_id = "idRatoWeaponSheet"
 local csv_path = "AppData/RatoWeaponSheet.csv"
 local samples = 64
+local group_gap = 14
+local cell_style = "PDAIMPContentTextSmall"
+local char_w, cell_pad = 8, 3
 
 local FullStats = {placeholder = true, Marksmanship = 100, Dexterity = 100, Agility = 100, Strength = 100}
 local ClassOrder = {"AssaultRifle", "SubmachineGun", "MachineGun", "SniperRifle", "Rifle", "Shotgun", "Pistol", "Revolver"}
-local ClassShort = {AssaultRifle = "AR", SubmachineGun = "SMG", MachineGun = "MG", SniperRifle = "SR", Rifle = "Rifle",
+local ClassShort = {AssaultRifle = "Rifle", SubmachineGun = "SMG", MachineGun = "MG", SniperRifle = "SR", Rifle = "Rifle",
                     Shotgun = "SG", Pistol = "Pistol", Revolver = "Rev"}
 local Stances = {"Standing", "Crouch", "Prone"}
 
@@ -126,56 +129,81 @@ local function Hundredths(v)
     return string.format("%d.%d", v / 100, abs(v) % 100 / 10)
 end
 
--- {key, width, tip, get(w, ctx), lower = smaller is better, fmt, text = not colored}
-local Columns = {
-    {"Id", 150, "Preset id", function(w) return w.class end, text = true},
-    {"Name", 150, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
-    {"Cls", 60, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
-    {"Cal", 90, "Caliber", function(w) return w.Caliber or "" end, text = true},
-    {"Src", 34, "V = vanilla, T = ToG patched", function(w) return w.is_tog_patched and "T" or "V" end, text = true},
-    {"Dmg", 40, "Damage, Basic ammo loaded", function(w) return w.Damage end},
-    {"Crit", 44, "CritChance", function(w) return w.CritChance end},
-    {"CPA", 40, "Crit per aim (Rat_WeaponCritPerAim x Hand-Eye)",
-     function(w, c) return MulDivRound(Rat_WeaponCritPerAim(w), c.unit and rGetHandEyeCoordination(c.unit) or 100, 100) end,
-     fmt = Hundredths},
-    {"Aim", 50, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end, fmt = Hundredths},
-    {"Hand", 48, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end},
-    {"PB", 36, "Point blank bonus", function(w, c) return PB(w, c.unit) end},
-    {"Hip", 40, "Hipfire cone mul %", function(w, c) return HipSnap(w, 0, c.unit) end, lower = true},
-    {"Snap", 42, "Snapshot cone mul %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
-    {"Rng", 38, "WeaponRange", function(w) return w.WeaponRange end},
-    {"Rec", 40, "Recoil (x100), the rollover's Recoil row", function(w, c) return Recoil(w, c.unit) end, lower = true},
-    {"BRec", 44, "Selective burst recoil (x100)",
-     function(w, c) return (BurstModes(w)) and ModeRecoil(w, c.unit, "burst_recoil_delta", true) end, lower = true},
-    {"ARec", 44, "Autofire recoil (x100)",
-     function(w, c) return select(2, BurstModes(w)) and ModeRecoil(w, c.unit, "auto_recoil_delta") end, lower = true},
-    {"RPM", 50, "RPM (variable autofire)", function(w) return Rat_HasVariableAuto(w) and w.RPM end},
-    {"AP", 34, "Default attack AP (selected merc prices it; else raw ShootAP)", function(w, c) return AttackAP(w, c.ap_unit) end, lower = true},
-    {"SAP", 36, "Stance + aim AP", function(w, c) return StanceAP(w, c.unit) end, lower = true},
-    {"RAP", 36, "ReloadAP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
-    {"Mag", 36, "MagazineSize", function(w) return w.MagazineSize end},
-    {"Noise", 54, "Noise, Basic ammo loaded", function(w) return w.Noise end, lower = true},
-    {"Rel", 40, "Reliability", function(w) return w.Reliability end},
-    {"Pen", 34, "Penetration class shown", function(w) return Rat_DisplayPenetrationClass(w) end},
-    {"Wt", 40, "Weight, kg", function(w) return w.Weight end, lower = true,
-     fmt = function(v) return string.format("%d.%d", v / 1000, v % 1000 / 100) end},
-    {"Cost", 62, "Cost", function(w) return w.Cost end, lower = true},
-    {"H5", 36, "CTH % hipfire (aim 0), 5 tiles, standing target", function(w, c) return ConeCTH(w, c.shooter, 0, 5) end},
-    {"H10", 38, "CTH % hipfire, 10 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 10) end},
-    {"A20", 38, "CTH % full aim, 20 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 20) end},
-    {"A30", 38, "CTH % full aim, 30 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 30) end},
-    {"A40", 38, "CTH % full aim, 40 tiles (10 tiles saturates at MaxCTH)",
-     function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 40) end},
-    {"B10", 38, "Selective burst, aim 3: mean CTH of each round, 10 tiles", function(w, c)
-        if not (BurstModes(w)) then return end
-        local action = CombatActions.BurstFire
-        return StringCTH(w, c.shooter, action, w:GetAutofireShots(action), 10)
-    end},
-    {"F10", 38, "Autofire 3 rounds, aim 3: mean CTH of each round, 10 tiles", function(w, c)
-        if not select(2, BurstModes(w)) then return end
-        return StringCTH(w, c.shooter, Rat_AutoFireView(3, Rat_AutoAttackId(w)), 3, 10)
-    end},
+-- {key, label, data chars, tip, get(w, ctx), lower = smaller is better, fmt, text = not colored, prop = greyed at its Firearm default}
+local Groups = {
+    {"Gun", {
+        {"Id", "Id", 15, "Preset id", function(w) return w.class end, text = true},
+        {"Name", "Name", 12, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
+        {"Cls", "Class", 6, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
+        {"Cal", "Caliber", 9, "Caliber", function(w) return w.Caliber or "" end, text = true},
+        {"Src", "Src", 3, "V = vanilla, T = ToG patched", function(w) return w.is_tog_patched and "T" or "V" end, text = true},
+    }},
+    {"Damage", {
+        {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end},
+        {"Crit", "Crit", 4, "CritChance, Basic ammo loaded", function(w) return w.CritChance end, prop = "CritChance"},
+        {"CPA", "C/Aim", 4, "Crit chance per aim level (Rat_WeaponCritPerAim x Hand-Eye)",
+         function(w, c) return MulDivRound(Rat_WeaponCritPerAim(w), c.unit and rGetHandEyeCoordination(c.unit) or 100, 100) end,
+         fmt = Hundredths, prop = "CritPerAim"},
+        {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end},
+    }},
+    {"Accuracy", {
+        {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end, fmt = Hundredths},
+        {"Hand", "Handl", 4, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end, prop = "Handling"},
+        {"PB", "PB", 4, "Point blank bonus", function(w, c) return PB(w, c.unit) end},
+        {"Hip", "Hip%", 4, "Hipfire cone multiplier %", function(w, c) return HipSnap(w, 0, c.unit) end, lower = true},
+        {"Snap", "Snap%", 4, "Snapshot cone multiplier %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
+        {"Rng", "Range", 4, "WeaponRange", function(w) return w.WeaponRange end, prop = "WeaponRange"},
+    }},
+    {"Recoil (x100)", {
+        {"Rec", "Single", 3, "Recoil, the rollover's Recoil row", function(w, c) return Recoil(w, c.unit) end, lower = true},
+        {"BRec", "Burst", 4, "Selective burst recoil",
+         function(w, c) return (BurstModes(w)) and ModeRecoil(w, c.unit, "burst_recoil_delta", true) end, lower = true},
+        {"ARec", "Auto", 4, "Autofire recoil",
+         function(w, c) return select(2, BurstModes(w)) and ModeRecoil(w, c.unit, "auto_recoil_delta") end, lower = true},
+        {"RPM", "RPM", 5, "RPM (variable autofire)", function(w) return Rat_HasVariableAuto(w) and w.RPM end, prop = "RPM"},
+    }},
+    {"AP", {
+        {"AP", "Attack", 4, "Default attack AP (the selected merc prices it; else raw ShootAP)",
+         function(w, c) return AttackAP(w, c.ap_unit) end, lower = true},
+        {"SAP", "Stance", 4, "Shooting stance + aim AP", function(w, c) return StanceAP(w, c.unit) end, lower = true},
+        {"RAP", "Reload", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
+    }},
+    {"Logistics", {
+        {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
+        {"Noise", "Noise", 4, "Noise, Basic ammo loaded", function(w) return w.Noise end, lower = true},
+        {"Rel", "Rel", 4, "Reliability", function(w) return w.Reliability end, prop = "Reliability"},
+        {"Wt", "Kg", 4, "Weight, kg", function(w) return w.Weight end, lower = true, prop = "Weight",
+         fmt = function(v) return string.format("%d.%d", v / 1000, v % 1000 / 100) end},
+        {"Cost", "Cost", 6, "Cost", function(w) return w.Cost end, lower = true},
+    }},
+    {"Hit chance % (standing target)", {
+        {"H5", "Hip5", 4, "Hipfire (aim 0), 5 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 5) end},
+        {"H10", "Hip10", 4, "Hipfire (aim 0), 10 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 10) end},
+        {"A20", "Aim20", 4, "Full aim, 20 tiles (10 tiles saturates at MaxCTH)",
+         function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 20) end},
+        {"A30", "Aim30", 4, "Full aim, 30 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 30) end},
+        {"A40", "Aim40", 4, "Full aim, 40 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 40) end},
+        {"B10", "Brst10", 4, "Selective burst at aim 3, 10 tiles: mean hit chance of each round (cone + recoil walk)", function(w, c)
+            if not (BurstModes(w)) then return end
+            local action = CombatActions.BurstFire
+            return StringCTH(w, c.shooter, action, w:GetAutofireShots(action), 10)
+        end},
+        {"F10", "Auto10", 4, "3-round autofire at aim 3, 10 tiles: mean hit chance of each round (cone + recoil walk)", function(w, c)
+            if not select(2, BurstModes(w)) then return end
+            return StringCTH(w, c.shooter, Rat_AutoFireView(3, Rat_AutoAttackId(w)), 3, 10)
+        end},
+    }},
 }
+
+local Columns = {}
+for gi, g in ipairs(Groups) do
+    for _, col in ipairs(g[2]) do
+        col.group = gi
+        col.label = table.remove(col, 2)
+        col.width = Max(#col.label, col[2]) * char_w + 2 * cell_pad
+        Columns[#Columns + 1] = col
+    end
+end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = ""}
 
@@ -191,11 +219,12 @@ local function ComputeRow(id, ctx)
         w:AddModifier("ammo", mod.target_prop, mod.mod_mul, mod.mod_add)
     end
     local c = {unit = ctx.unit, ap_unit = ctx.ap_unit, shooter = Shooter(w, ctx.unit, ctx.stance)}
-    local row = {cls_order = table.find(ClassOrder, WeaponClass(w)) or 99}
+    local row = {cls_order = table.find(ClassOrder, WeaponClass(w)) or 99, default = {}}
     for _, col in ipairs(Columns) do
         local ok, v = pcall(col[4], w, c)
         row[col[1]] = ok and v or nil
         if not ok then row.err = (row.err or "") .. col[1] .. " " end
+        if col.prop and w[col.prop] == Firearm:GetDefaultPropertyValue(col.prop) then row.default[col[1]] = true end
     end
     DoneObject(w)
     return row
@@ -259,6 +288,10 @@ local function SetStatus(dlg, text)
     if dlg.idStatus then dlg.idStatus:SetText(text or "") end
 end
 
+local function row_default(r, col)
+    return r.default and r.default[col[1]]
+end
+
 local function Render(dlg)
     local rows = VisibleRows()
     for i, col in ipairs(Columns) do
@@ -273,7 +306,9 @@ local function Render(dlg)
         for k, r in ipairs(rows) do
             local v = r[col[1]]
             local s = CellText(col, v)
-            if type(v) == "number" and lo and hi > lo then
+            if row_default(r, col) then
+                s = "<color 110 110 110>" .. s .. "</color>"
+            elseif type(v) == "number" and lo and hi > lo then
                 local t = MulDivRound(v - lo, 1000, hi - lo)
                 s = ScaleColor(col.lower and 1000 - t or t) .. s .. "</color>"
             elseif k % 2 == 0 then
@@ -283,10 +318,11 @@ local function Render(dlg)
         end
         dlg["idCol" .. i]:SetText(table.concat(lines, "\n"))
         local head = dlg["idHead" .. i]
-        head:SetText(col[1] .. (State.sort == col[1] and (State.desc and " v" or " ^") or ""))
+        head:SetTextColor(State.sort ~= col[1] and RGB(220, 220, 220) or State.desc and RGB(240, 190, 90) or RGB(120, 190, 240))
     end
-    SetStatus(dlg, string.format("%d / %d guns  |  shooter: %s, %s", #rows, #(State.rows or empty_table),
-        State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 100") or "stat 100, gun alone",
+    SetStatus(dlg, string.format("%d / %d guns  |  sorted by %s %s  |  shooter: %s, %s", #rows, #(State.rows or empty_table),
+        Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
+        State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 100") or "stat 100",
         Stances[State.stance]))
 end
 
@@ -364,7 +400,7 @@ local function Build()
     local dlg = XWindow:new({
         Id = sheet_id,
         IdNode = true,
-        Margins = box(30, 30, 30, 30),
+        Margins = box(16, 20, 16, 20),
         Padding = box(10, 8, 10, 8),
         LayoutMethod = "VList",
         LayoutVSpacing = 6,
@@ -401,7 +437,7 @@ local function Build()
         local r = XEdit.OnShortcut(self, shortcut, source, ...)
         return r or (#shortcut == 1 and "break") or nil
     end
-    local cls_list = {false, "AR", "SMG", "MG", "SR", "Rifle", "SG", "Pistol", "Rev"}
+    local cls_list = {false, "Rifle", "SMG", "MG", "SR", "SG", "Pistol", "Rev"}
     local cls_btn
     cls_btn = Button(bar, "Class: all", function()
         local i = (table.find(cls_list, State.cls) or 1) % #cls_list + 1
@@ -431,7 +467,7 @@ local function Build()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar)
         :SetTextColor(RGB(200, 180, 120))
 
-    local head = XWindow:new({LayoutMethod = "HList", Background = RGBA(35, 35, 35, 255)}, dlg)
+    local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap}, dlg)
     local list_box = XWindow:new({}, dlg)
     XSleekScroll:new({Id = "idSheetScroll", Target = "idSheet", Dock = "right", Margins = box(4, 0, 0, 0), AutoHide = true}, list_box)
     local area = XScrollArea:new({
@@ -439,29 +475,41 @@ local function Build()
         IdNode = false,
         VScroll = "idSheetScroll",
         LayoutMethod = "HList",
+        LayoutHSpacing = group_gap,
         MouseWheelStep = 80,
     }, list_box)
+    local head_groups, body_groups = {}, {}
+    for gi, g in ipairs(Groups) do
+        local shade = gi % 2 == 0 and RGBA(255, 255, 255, 10) or RGBA(0, 0, 0, 0)
+        local hg = XWindow:new({LayoutMethod = "VList", Background = RGBA(35, 35, 35, 255)}, head)
+        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center"}, hg)
+        label:SetTextColor(RGB(230, 200, 120))
+        label:SetText(g[1])
+        head_groups[gi] = XWindow:new({LayoutMethod = "HList"}, hg)
+        body_groups[gi] = XWindow:new({LayoutMethod = "HList", Background = shade}, area)
+    end
     for i, col in ipairs(Columns) do
         local key = col[1]
-        Button(head, key, function()
+        Button(head_groups[col.group], col.label, function()
             if State.sort == key then State.desc = not State.desc else State.sort, State.desc = key, not col.text end
             Render(dlg)
         end, {
             Id = "idHead" .. i,
-            MinWidth = col[2], MaxWidth = col[2],
-            Padding = box(3, 2, 3, 2),
+            TextStyle = cell_style,
+            MinWidth = col.width, MaxWidth = col.width,
+            Padding = box(cell_pad, 2, cell_pad, 2),
             Background = RGBA(0, 0, 0, 0),
             RolloverText = Untranslated(col[3]),
         })
         XText:new({
             Id = "idCol" .. i,
             Translate = false,
-            TextStyle = "SatelliteContextMenuText",
-            MinWidth = col[2], MaxWidth = col[2],
-            Padding = box(3, 0, 3, 0),
+            TextStyle = cell_style,
+            MinWidth = col.width, MaxWidth = col.width,
+            Padding = box(cell_pad, 0, cell_pad, 0),
             WordWrap = false,
             Clip = "self",
-        }, area)
+        }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
     end
     dlg:Open()
     search:SetFocus()
