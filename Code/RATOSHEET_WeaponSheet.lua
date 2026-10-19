@@ -49,6 +49,11 @@ local function ModeRecoil(w, unit, delta_prop, bump)
     if bump and w:HasComponent("recoil_bump") then
         net = cRound(net * const.Combat.Recoil.Components.RecoilBumpMul)
     end
+    -- rate of fire, as GetRecoil applies it: only above ROFRefRPM, shotguns exempt
+    local rof = not IsKindOf(w, "Shotgun") and Rat_GetROF(w) or 100
+    if rof > 100 then
+        net = MulDivRound(net, rof, 100)
+    end
     if unit and unit:HasStatusEffect("AutoWeapons") then
         net = cRound(net * const.Combat.Recoil.Perks.AutoWeaponsMul)
     end
@@ -159,11 +164,14 @@ local Groups = {
     }},
     {"Recoil (x100)", {
         {"Rec", "Single", 3, "Recoil, the rollover's Recoil row", function(w, c) return Recoil(w, c.unit) end, lower = true},
-        {"BRec", "Burst", 4, "Selective burst recoil",
+        {"BRec", "Burst", 4, "Selective burst recoil, rate of fire included",
          function(w, c) return (BurstModes(w)) and ModeRecoil(w, c.unit, "burst_recoil_delta", true) end, lower = true},
-        {"ARec", "Auto", 4, "Autofire recoil",
+        {"ARec", "Auto", 4, "Autofire recoil, rate of fire included",
          function(w, c) return select(2, BurstModes(w)) and ModeRecoil(w, c.unit, "auto_recoil_delta") end, lower = true},
-        {"RPM", "RPM", 5, "RPM (variable autofire)", function(w) return Rat_HasVariableAuto(w) and w.RPM end, prop = "RPM"},
+        {"RPM", "RPM", 5, "Rate of fire of burst and autofire", function(w)
+            local burst, auto = BurstModes(w)
+            return (burst or auto) and w.RPM
+        end, prop = "RPM"},
     }},
     {"AP", {
         {"AP", "Attack", 4, "Default attack AP (the selected merc prices it; else raw ShootAP)",
