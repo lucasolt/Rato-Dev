@@ -4,7 +4,7 @@
 local sheet_id = "idRatoWeaponSheet"
 local csv_path = "AppData/RatoWeaponSheet.csv"
 local samples = 64
-local group_gap = 14
+local group_gap = 12
 local cell_style = "PDAIMPContentTextSmall"
 local char_w, cell_pad = 8, 3
 
@@ -133,7 +133,7 @@ end
 local Groups = {
     {"Gun", {
         {"Id", "Id", 15, "Preset id", function(w) return w.class end, text = true},
-        {"Name", "Name", 12, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
+        {"Name", "Name", 11, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
         {"Cls", "Class", 6, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
         {"Cal", "Caliber", 9, "Caliber", function(w) return w.Caliber or "" end, text = true},
         {"Src", "Src", 3, "V = vanilla, T = ToG patched", function(w) return w.is_tog_patched and "T" or "V" end, text = true},
@@ -177,6 +177,8 @@ local Groups = {
         {"Rel", "Rel", 4, "Reliability", function(w) return w.Reliability end, prop = "Reliability"},
         {"Wt", "Kg", 4, "Weight, kg", function(w) return w.Weight end, lower = true, prop = "Weight",
          fmt = function(v) return string.format("%d.%d", v / 1000, v % 1000 / 100) end},
+        {"Brl", "Brl", 4, "Effective barrel length, mm (components applied)",
+         function(w) return (w.rat_barrel_len or 0) > 0 and Rat_EffectiveBarrelLength(w) end},
         {"Cost", "Cost", 6, "Cost", function(w) return w.Cost end, lower = true},
     }},
     {"Hit chance % (standing target)", {
