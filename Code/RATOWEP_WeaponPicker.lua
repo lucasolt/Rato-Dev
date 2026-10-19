@@ -261,6 +261,7 @@ local function BuildPanel(dlg)
     local actions = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6}, panel)
     MakeButton(actions, "Give to merc", function() GiveOrDrop(dlg, panel, false) end)
     MakeButton(actions, "Drop (ground/stash)", function() GiveOrDrop(dlg, panel, true) end)
+    MakeButton(actions, "Sheet", function() RatoWeaponSheet_Open() end)
 
     XText:new({
         Id = "idStatus",

@@ -33,6 +33,7 @@ return PlaceObj('ModDef', {
 		"Code/ZulibReloadFix.lua",
 		"Code/RATOARENA_AIvsAI.lua",
 		"Code/RATOWEP_WeaponPicker.lua",
+		"Code/RATOSHEET_WeaponSheet.lua",
 	},
 	'default_options', {},
 	'saved', 1790727310,
