@@ -149,6 +149,9 @@ local Groups = {
     {"Accuracy", {
         {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end, fmt = Hundredths},
         {"Hand", "Handl", 4, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end, prop = "Handling"},
+        {"AimH", "3Aim+H", 5, "(Aim x 3 + Handling) / 3: accuracy per aim level over 3 aim levels",
+         function(w, c) return MulDivRound(Aim(w, c.unit) * 3 + Rat_HandlingEffectivePoints(w, c.unit) * 100, 1, 3) end,
+         fmt = Hundredths},
         {"PB", "PB", 4, "Point blank bonus", function(w, c) return PB(w, c.unit) end},
         {"Hip", "Hip%", 4, "Hipfire cone multiplier %", function(w, c) return HipSnap(w, 0, c.unit) end, lower = true},
         {"Snap", "Snap%", 4, "Snapshot cone multiplier %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
