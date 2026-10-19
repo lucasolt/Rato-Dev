@@ -4,7 +4,7 @@
 local sheet_id = "idRatoWeaponSheet"
 local csv_path = "AppData/RatoWeaponSheet.csv"
 local samples = 64
-local group_gap = 12
+local group_gap = 10
 local cell_style = "PDAIMPContentTextSmall"
 local char_w, cell_pad = 8, 3
 
@@ -38,6 +38,9 @@ local function Shooter(weapon, owner, stance)
     return s
 end
 
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = false,
+               view = "overview", aim = 3, dist = 10}
+
 local function Recoil(w, unit)
     local recoil = GetWepRecoil(w, unit, true) * GetCaliberStrRecoil(w, unit or FullStats)
     if unit then recoil = recoil * GetRecoilOther(w, unit, false) end
@@ -48,11 +51,6 @@ local function ModeRecoil(w, unit, delta_prop, bump)
     local net = MulDivRound(Recoil(w, unit), w[delta_prop] or 100, 100)
     if bump and w:HasComponent("recoil_bump") then
         net = cRound(net * const.Combat.Recoil.Components.RecoilBumpMul)
-    end
-    -- rate of fire, as GetRecoil applies it: only above ROFRefRPM, shotguns exempt
-    local rof = not IsKindOf(w, "Shotgun") and Rat_GetROF(w) or 100
-    if rof > 100 then
-        net = MulDivRound(net, rof, 100)
     end
     if unit and unit:HasStatusEffect("AutoWeapons") then
         net = cRound(net * const.Combat.Recoil.Perks.AutoWeaponsMul)
@@ -117,17 +115,66 @@ local function ConeCTH(w, shooter, aim, tiles)
     return Clamp(Rat_RayleighCTH(Theta(tiles), Sigma(w, shooter, nil, aim)), a.MinCTH, a.MaxCTH)
 end
 
--- mean CTH of every round of the string at full aim (capped at 3), cone + recoil walk
-local function StringCTH(w, shooter, action, shots, tiles)
-    local prof = action and Rat_RecoilProfile(shooter, action, w, shots)
-    if not prof then return end
-    local aim = Min(3, w.MaxAimActions or 3)
-    local est = Rat_EstimateBurst(prof, Theta(tiles), Sigma(w, shooter, action, aim), shots, samples)
-    local a, sum = const.Combat.Aperture, 0
-    for i = 1, shots do
-        sum = sum + Clamp(est.cth[i] or 0, a.MinCTH, a.MaxCTH)
+-- the attack each fire mode stands for; autofire at 3 rounds
+local function ModeAction(w, kind)
+    local burst, auto = BurstModes(w)
+    if kind == "single" then
+        return not w.AutoFireOnly and CombatActions.SingleShot, 1
+    elseif kind == "burst" then
+        local action = burst and CombatActions.BurstFire
+        return action, action and w:GetAutofireShots(action)
     end
-    return MulDivRound(sum, 1, shots)
+    return auto and Rat_AutoFireView(3, Rat_AutoAttackId(w)), 3
+end
+
+-- muzzle offset of the last round (3rd at most), arcmin; no cone, so it is the recoil walk alone
+local function Drift(w, c, kind)
+    local action, shots = ModeAction(w, kind)
+    shots = Min(3, shots or 0)
+    local prof = action and shots > 1 and Rat_RecoilProfile(c.shooter, action, w, shots)
+    if not prof then return end
+    return Rat_EstimateBurst(prof, nil, nil, shots, samples).offset[shots]
+end
+
+-- one fire mode at the sheet's aim and distance: {shots, sum of round CTH, expected damage, AP}, cached per row
+local function ModeStats(w, c, kind)
+    if c[kind] ~= nil then return c[kind] or nil end
+    c[kind] = false
+    local action, shots = ModeAction(w, kind)
+    if not action then return end
+    local a = const.Combat.Aperture
+    local aim = Min(State.aim, w.MaxAimActions or 3)
+    local sum = 0
+    if kind == "single" then
+        sum = ConeCTH(w, c.shooter, aim, State.dist)
+    else
+        local prof = Rat_RecoilProfile(c.shooter, action, w, shots)
+        if not prof then return end
+        local est = Rat_EstimateBurst(prof, Theta(State.dist), Sigma(w, c.shooter, action, aim), shots, samples)
+        for i = 1, shots do
+            sum = sum + Clamp(est.cth[i] or 0, a.MinCTH, a.MaxCTH)
+        end
+    end
+    -- with aim, GetAPCost already adds the shooting stance and the aim levels
+    local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
+    ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
+    c[kind] = {shots = shots, sum = sum, dmg = MulDivRound(sum, w.Damage or 0, 100), ap = ap}
+    return c[kind]
+end
+
+local function Field(w, c, kind, key)
+    local m = ModeStats(w, c, kind)
+    return m and m[key]
+end
+
+-- damage per AP in hundredths
+local function DmgPerAP(w, c, kind)
+    local m = ModeStats(w, c, kind)
+    return m and m.ap and MulDivRound(m.dmg * 100, 1, m.ap)
+end
+
+local function Cents(v)
+    return string.format("%d.%02d", v / 100, v % 100)
 end
 
 local function Hundredths(v)
@@ -152,7 +199,8 @@ local Groups = {
         {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end},
     }},
     {"Accuracy", {
-        {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end, fmt = Hundredths},
+        {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end,
+         fmt = function(v) return tostring(MulDivRound(v, 1, 100)) end},
         {"Hand", "Handl", 4, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end, prop = "Handling"},
         {"AimH", "3Aim+H", 5, "(Aim x 3 + Handling) / 3: accuracy per aim level over 3 aim levels",
          function(w, c) return MulDivRound(Aim(w, c.unit) * 3 + Rat_HandlingEffectivePoints(w, c.unit) * 100, 1, 3) end,
@@ -162,16 +210,23 @@ local Groups = {
         {"Snap", "Snap%", 4, "Snapshot cone multiplier %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
         {"Rng", "Range", 4, "WeaponRange", function(w) return w.WeaponRange end, prop = "WeaponRange"},
     }},
-    {"Recoil (x100)", {
-        {"Rec", "Single", 3, "Recoil, the rollover's Recoil row", function(w, c) return Recoil(w, c.unit) end, lower = true},
-        {"BRec", "Burst", 4, "Selective burst recoil, rate of fire included",
+    {"Kick (x100)", {
+        {"Rec", "Single", 3, "Kick, the rollover's Recoil row: the gun's own push (aCTH KickMag), not the walk",
+         function(w, c) return Recoil(w, c.unit) end, lower = true},
+        {"BRec", "Burst", 4, "Selective burst kick",
          function(w, c) return (BurstModes(w)) and ModeRecoil(w, c.unit, "burst_recoil_delta", true) end, lower = true},
-        {"ARec", "Auto", 4, "Autofire recoil, rate of fire included",
+        {"ARec", "Auto", 4, "Autofire kick",
          function(w, c) return select(2, BurstModes(w)) and ModeRecoil(w, c.unit, "auto_recoil_delta") end, lower = true},
-        {"RPM", "RPM", 5, "Rate of fire of burst and autofire", function(w)
+        {"RPM", "RPM", 5, "Rate of fire of burst and autofire: shortens the recovery between rounds (see Drift)", function(w)
             local burst, auto = BurstModes(w)
             return (burst or auto) and w.RPM
         end, prop = "RPM"},
+    }},
+    {"Drift", {
+        {"BDrift", "Burst", 4, "Selective burst: how far the muzzle walked by the last round (3rd at most), arcmin. "
+            .. "Kick, RPM, weight, Strength, stance and bipod; no cone", function(w, c) return Drift(w, c, "burst") end, lower = true},
+        {"ADrift", "Auto", 4, "3-round autofire: how far the muzzle walked by the 3rd round, arcmin",
+         function(w, c) return Drift(w, c, "auto") end, lower = true},
     }},
     {"AP", {
         {"AP", "Attack", 4, "Default attack AP (the selected merc prices it; else raw ShootAP)",
@@ -179,7 +234,7 @@ local Groups = {
         {"SAP", "Stance", 4, "Shooting stance + aim AP", function(w, c) return StanceAP(w, c.unit) end, lower = true},
         {"RAP", "Reload", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
     }},
-    {"Logistics", {
+    {"Logistics", view = "overview", {
         {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
         {"Noise", "Noise", 4, "Noise, Basic ammo loaded", function(w) return w.Noise end, lower = true},
         {"Rel", "Rel", 4, "Reliability", function(w) return w.Reliability end, prop = "Reliability"},
@@ -189,22 +244,39 @@ local Groups = {
          function(w) return (w.rat_barrel_len or 0) > 0 and Rat_EffectiveBarrelLength(w) end},
         {"Cost", "Cost", 6, "Cost", function(w) return w.Cost end, lower = true},
     }},
-    {"Hit chance % (standing target)", {
+    {"Hit % (standing)", view = "overview", {
         {"H5", "Hip5", 4, "Hipfire (aim 0), 5 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 5) end},
         {"H10", "Hip10", 4, "Hipfire (aim 0), 10 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 10) end},
         {"A20", "Aim20", 4, "Full aim, 20 tiles (10 tiles saturates at MaxCTH)",
          function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 20) end},
         {"A30", "Aim30", 4, "Full aim, 30 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 30) end},
         {"A40", "Aim40", 4, "Full aim, 40 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 40) end},
-        {"B10", "Brst10", 4, "Selective burst at aim 3, 10 tiles: mean hit chance of each round (cone + recoil walk)", function(w, c)
-            if not (BurstModes(w)) then return end
-            local action = CombatActions.BurstFire
-            return StringCTH(w, c.shooter, action, w:GetAutofireShots(action), 10)
-        end},
-        {"F10", "Auto10", 4, "3-round autofire at aim 3, 10 tiles: mean hit chance of each round (cone + recoil walk)", function(w, c)
-            if not select(2, BurstModes(w)) then return end
-            return StringCTH(w, c.shooter, Rat_AutoFireView(3, Rat_AutoAttackId(w)), 3, 10)
-        end},
+    }},
+    {"Single", view = "autofire", {
+        {"SDmg", "Dmg", 4, "Expected damage of one shot: hit chance x Damage (no crit, no armor)",
+         function(w, c) return Field(w, c, "single", "dmg") end},
+        {"S1AP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
+         function(w, c) return Field(w, c, "single", "ap") end, lower = true},
+        {"SDAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "single") end, fmt = Cents},
+    }},
+    {"Burst", view = "autofire", {
+        {"BRds", "Rds", 3, "Rounds per burst", function(w, c) return Field(w, c, "burst", "shots") end, text = true},
+        {"BHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
+         function(w, c) return Field(w, c, "burst", "sum") end, fmt = Hundredths},
+        {"BDmg", "Dmg", 4, "Expected damage: hits x Damage (no crit, no armor)",
+         function(w, c) return Field(w, c, "burst", "dmg") end},
+        {"BAP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
+         function(w, c) return Field(w, c, "burst", "ap") end, lower = true},
+        {"BDAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "burst") end, fmt = Cents},
+    }},
+    {"Auto (3 rds)", view = "autofire", {
+        {"AHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
+         function(w, c) return Field(w, c, "auto", "sum") end, fmt = Hundredths},
+        {"ADmg", "Dmg", 4, "Expected damage: hits x Damage (no crit, no armor)",
+         function(w, c) return Field(w, c, "auto", "dmg") end},
+        {"AAP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
+         function(w, c) return Field(w, c, "auto", "ap") end, lower = true},
+        {"ADAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "auto") end, fmt = Cents},
     }},
 }
 
@@ -218,7 +290,6 @@ for gi, g in ipairs(Groups) do
     end
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = false}
 
 -- hand-authored optics (SteyrS_Scope_1) carry no Scope trait, only the scope effects
 local function IsScope(id)
@@ -245,6 +316,8 @@ local function StripScope(w)
     end
     return true
 end
+
+local ApplyView
 
 local function SelectedUnit()
     return IsKindOf(SelectedObj, "Unit") and SelectedObj or nil
@@ -383,10 +456,10 @@ local function Render(dlg)
         local head = dlg["idHead" .. i]
         head:SetTextColor(State.sort ~= col[1] and RGB(220, 220, 220) or State.desc and RGB(240, 190, 90) or RGB(120, 190, 240))
     end
-    SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s", #rows, #(State.rows or empty_table),
+    SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s%s", #rows, #(State.rows or empty_table),
         Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
         State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 100") or "stat 100",
-        Stances[State.stance]))
+        Stances[State.stance], SelectedUnit() and "" or " | select a merc to price AP"))
 end
 
 local function Recompute(dlg)
@@ -459,14 +532,32 @@ local function Button(parent, text, on_press, props)
     return XTextButton:new(t, parent)
 end
 
+local Distances = {5, 10, 15, 20, 30}
+
+-- shows the view's groups; shading alternates over the visible ones only
+ApplyView = function(dlg)
+    local blocks = rawget(dlg, "rat_blocks")
+    local n = 0
+    for gi, g in ipairs(Groups) do
+        local show = not g.view or g.view == State.view
+        local shade = RGBA(0, 0, 0, 0)
+        if show then
+            n = n + 1
+            if n % 2 == 0 then shade = RGBA(255, 255, 255, 12) end
+        end
+        for _, win in ipairs{blocks.head[gi], blocks.body[gi]} do
+            win:SetVisible(show)
+            win:SetBackground(shade)
+        end
+    end
+end
+
 local function Build()
     local dlg = XWindow:new({
         Id = sheet_id,
         IdNode = true,
         Margins = box(16, 20, 16, 20),
         Padding = box(10, 8, 10, 8),
-        LayoutMethod = "VList",
-        LayoutVSpacing = 6,
         Background = RGBA(12, 12, 12, 250),
         HandleMouse = true,
         ZOrder = 1000,
@@ -476,7 +567,7 @@ local function Build()
         return XWindow.OnShortcut(self, shortcut, ...)
     end
 
-    local bar = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6}, dlg)
+    local bar = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top"}, dlg)
     local title = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar)
     title:SetTextColor(RGB(230, 200, 120))
     title:SetText("WEAPON SHEET")
@@ -534,11 +625,37 @@ local function Build()
     Button(bar, "Export CSV", function() ExportCSV(dlg) end,
         {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
     Button(bar, "Close", function() dlg:Close() end)
-    XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar)
+
+    local bar2 = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top", Margins = box(0, 6, 0, 0)}, dlg)
+    local view_btn, aim_btn, dist_btn
+    local function knob_texts()
+        view_btn:SetText(State.view == "autofire" and "View: Autofire" or "View: Overview")
+        aim_btn:SetText("Aim: " .. State.aim)
+        dist_btn:SetText("Dist: " .. State.dist .. " tiles")
+    end
+    view_btn = Button(bar2, "", function()
+        State.view = State.view == "autofire" and "overview" or "autofire"
+        knob_texts()
+        ApplyView(dlg)
+    end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP")})
+    aim_btn = Button(bar2, "", function()
+        State.aim = (State.aim + 1) % 4
+        knob_texts()
+        Recompute(dlg)
+    end, {RolloverText = Untranslated("Aim level of the Autofire view, capped by the gun's MaxAimActions")})
+    dist_btn = Button(bar2, "", function()
+        local i = table.find(Distances, State.dist) or 0
+        State.dist = Distances[i % #Distances + 1]
+        knob_texts()
+        Recompute(dlg)
+    end, {RolloverText = Untranslated("Target distance of the Autofire view; the target is always standing")})
+    knob_texts()
+    XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
         :SetTextColor(RGB(200, 180, 120))
 
-    local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap, Background = RGBA(30, 30, 30, 255)}, dlg)
-    local list_box = XWindow:new({Id = "idListBox", Clip = "self"}, dlg)
+    local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap, Dock = "top", Margins = box(0, 6, 0, 0),
+                              Background = RGBA(30, 30, 30, 255)}, dlg)
+    local list_box = XWindow:new({Id = "idListBox", Dock = "box", Clip = "self"}, dlg)
     XWindow:new({
         Id = "idHover",
         Dock = "ignore",
@@ -555,19 +672,20 @@ local function Build()
         LayoutHSpacing = group_gap,
         MouseWheelStep = 80,
     }, list_box)
-    local head_groups, body_groups = {}, {}
+    local head_groups, body_groups, head_blocks = {}, {}, {}
+    rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups})
     for gi, g in ipairs(Groups) do
-        local shade = gi % 2 == 0 and RGBA(255, 255, 255, 12) or RGBA(0, 0, 0, 0)
         local width = 0
         for _, col in ipairs(g[2]) do width = width + col.width end
         -- head and body blocks share one width so a long group label can't shift the columns under it
-        local hg = XWindow:new({LayoutMethod = "VList", Background = shade, MinWidth = width, MaxWidth = width}, head)
-        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self"}, hg)
+        local hg = XWindow:new({LayoutMethod = "VList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, head)
+        head_blocks[gi] = hg
+        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self", WordWrap = false}, hg)
         label:SetTextColor(RGB(230, 200, 120))
         label:SetText(g[1])
         XWindow:new({MinHeight = 1, MaxHeight = 1, Margins = box(4, 0, 4, 0), Background = RGBA(230, 200, 120, 90)}, hg)
         head_groups[gi] = XWindow:new({LayoutMethod = "HList"}, hg)
-        body_groups[gi] = XWindow:new({LayoutMethod = "HList", Background = shade, MinWidth = width, MaxWidth = width}, area)
+        body_groups[gi] = XWindow:new({LayoutMethod = "HList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, area)
     end
     for i, col in ipairs(Columns) do
         local key = col[1]
@@ -592,7 +710,8 @@ local function Build()
             Padding = box(cell_pad, 0, cell_pad, 0),
             TextHAlign = col.text and "left" or "right",
             WordWrap = false,
-            Clip = "self",
+            -- "self" would replace the list's clip rect, letting scrolled rows paint over the header
+            Clip = "parent & self",
         }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
     end
     dlg.OnMousePos = function(self, pt)
@@ -607,6 +726,7 @@ local function Build()
         UpdateHover(dlg, rawget(dlg, "rat_last_pt"))
         return ret
     end
+    ApplyView(dlg)
     dlg:Open()
     search:SetFocus()
     return dlg
