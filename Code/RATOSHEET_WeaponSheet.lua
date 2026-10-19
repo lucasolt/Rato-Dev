@@ -212,7 +212,10 @@ end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = false}
 
+-- hand-authored optics (SteyrS_Scope_1) carry no Scope trait, only the scope effects
 local function IsScope(id)
+    local def = id and WeaponComponents[id]
+    if def and table.find(def.ModificationEffects or empty_table, "ScopeFloorReduction") then return true end
     local scopes = const.Combat.Aperture.ScopeTraits or empty_table
     for _, t in ipairs(id and id ~= "" and GBO_TraitsOf(id) or empty_table) do
         if scopes[t] and t ~= "Scope.Ironsight" then return true end
