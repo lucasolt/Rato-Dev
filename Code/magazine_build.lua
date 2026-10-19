@@ -350,8 +350,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
     local displayNamePlural = "T(" .. generate12DigitRandom() .. "," .. "'" .. wepname ..
                                   " Magazines" .. "'" .. ")"
     local description =
-        "T(" .. generate12DigitRandom() .. "," .. "'" .. wepname .. " Magazine for " .. cal ..
-            " rounds" .. "'" .. ")"
+        "T(" .. generate12DigitRandom() .. "," .. "'" .. wepname .. " Magazine" .. "'" .. ")"
     local add_hint = "T(" .. generate12DigitRandom() .. "," .. "'" .. cal .. "'" .. ")"
 
     local platform = id .. "_" .. w.Caliber
@@ -404,7 +403,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
             displayNamePlural_ex = "T(" .. generate12DigitRandom() .. "," .. "'" .. wepname ..
                                        " Extended Magazines" .. "'" .. ")"
             description_ex = "T(" .. generate12DigitRandom() .. "," .. "'" .. wepname ..
-                                 " Extended Magazine for " .. cal .. " rounds" .. "'" .. ")"
+                                 " Extended Magazine" .. "'" .. ")"
             mag_item_id_ex = id .. "_MagazineLarge"
 
             ex_tabua = generate_tabua(mag_item_id_ex, mag_class, icon_ex, displayName_ex,
@@ -457,8 +456,7 @@ local function BuildMagazineItemRATRVE(id, magsize, mag_mod, ancestor_id, custom
         local drum_tabua = generate_tabua(drum_id, "LargeMag", icon_d,
                                           "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazine')",
                                           "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazines')",
-                                          "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazine for " ..
-                                              cal .. " rounds')", add_hint, platform,
+                                          "T(" .. generate12DigitRandom() .. ",'" .. wepname .. " Drum Magazine')", add_hint, platform,
                                           MulDivRound(magsize, mul, 100), cal, "MagLarger", drum_ancestor)
         table.insert(InventoryItem_table, generate_class_code(drum_tabua))
         table.insert(PosClass_table, drum_id)
