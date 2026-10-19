@@ -208,7 +208,30 @@ for gi, g in ipairs(Groups) do
     end
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = ""}
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = false}
+
+local function IsScope(id)
+    local scopes = const.Combat.Aperture.ScopeTraits or empty_table
+    for _, t in ipairs(id and id ~= "" and GBO_TraitsOf(id) or empty_table) do
+        if scopes[t] and t ~= "Scope.Ironsight" then return true end
+    end
+end
+
+-- optic off: empty slot when allowed, else a non-scope option (ironsights first); false when the optic is integral
+local function StripScope(w)
+    for _, slot in ipairs(w.ComponentSlots or empty_table) do
+        local cur = w.components[slot.SlotType]
+        if IsScope(cur) then
+            local pick = slot.CanBeEmpty and ""
+            for _, id in ipairs(pick and empty_table or slot.AvailableComponents or empty_table) do
+                if not IsScope(id) and (not pick or id:find("ron")) then pick = id end
+            end
+            if not pick then return false end
+            w:SetWeaponComponent(slot.SlotType, pick)
+        end
+    end
+    return true
+end
 
 local function SelectedUnit()
     return IsKindOf(SelectedObj, "Unit") and SelectedObj or nil
@@ -217,6 +240,7 @@ end
 local function ComputeRow(id, ctx)
     local w = PlaceInventoryItem(id)
     if not w then return end
+    local kept_scope = ctx.no_scope and not StripScope(w)
     local ammo = Rat_BasicAmmoClass(w)
     for _, mod in ipairs(ammo and ammo.Modifications or empty_table) do
         w:AddModifier("ammo", mod.target_prop, mod.mod_mul, mod.mod_add)
@@ -229,6 +253,7 @@ local function ComputeRow(id, ctx)
         if not ok then row.err = (row.err or "") .. col[1] .. " " end
         if col.prop and w[col.prop] == Firearm:GetDefaultPropertyValue(col.prop) then row.default[col[1]] = true end
     end
+    if kept_scope then row.Id = row.Id .. "*" end
     DoneObject(w)
     return row
 end
@@ -323,7 +348,7 @@ local function Render(dlg)
         local head = dlg["idHead" .. i]
         head:SetTextColor(State.sort ~= col[1] and RGB(220, 220, 220) or State.desc and RGB(240, 190, 90) or RGB(120, 190, 240))
     end
-    SetStatus(dlg, string.format("%d / %d guns  |  sorted by %s %s  |  shooter: %s, %s", #rows, #(State.rows or empty_table),
+    SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s", #rows, #(State.rows or empty_table),
         Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
         State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 100") or "stat 100",
         Stances[State.stance]))
@@ -333,7 +358,7 @@ local function Recompute(dlg)
     if rawget(dlg, "rat_thread") then return end
     rawset(dlg, "rat_thread", CreateRealTimeThread(function()
         local unit = State.merc and SelectedUnit() or nil
-        local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance]}
+        local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance], no_scope = State.no_scope}
         local ids, rows = Ids(), {}
         local t0 = RealTime()
         for i, id in ipairs(ids) do
@@ -463,6 +488,13 @@ local function Build()
         Recompute(dlg)
     end, {RolloverText = Untranslated("Shooter stance for the CTH columns; the target is always standing")})
     stance_btn:SetText("Stance: " .. Stances[State.stance])
+    local scope_btn
+    scope_btn = Button(bar, "", function()
+        State.no_scope = not State.no_scope
+        scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
+        Recompute(dlg)
+    end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = integral optic, kept")})
+    scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
     Button(bar, "Recompute", function() Recompute(dlg) end)
     Button(bar, "Export CSV", function() ExportCSV(dlg) end,
         {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
@@ -470,7 +502,7 @@ local function Build()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar)
         :SetTextColor(RGB(200, 180, 120))
 
-    local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap}, dlg)
+    local head = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = group_gap, Background = RGBA(30, 30, 30, 255)}, dlg)
     local list_box = XWindow:new({}, dlg)
     XSleekScroll:new({Id = "idSheetScroll", Target = "idSheet", Dock = "right", Margins = box(4, 0, 0, 0), AutoHide = true}, list_box)
     local area = XScrollArea:new({
@@ -483,17 +515,21 @@ local function Build()
     }, list_box)
     local head_groups, body_groups = {}, {}
     for gi, g in ipairs(Groups) do
-        local shade = gi % 2 == 0 and RGBA(255, 255, 255, 10) or RGBA(0, 0, 0, 0)
-        local hg = XWindow:new({LayoutMethod = "VList", Background = RGBA(35, 35, 35, 255)}, head)
-        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center"}, hg)
+        local shade = gi % 2 == 0 and RGBA(255, 255, 255, 12) or RGBA(0, 0, 0, 0)
+        local width = 0
+        for _, col in ipairs(g[2]) do width = width + col.width end
+        -- head and body blocks share one width so a long group label can't shift the columns under it
+        local hg = XWindow:new({LayoutMethod = "VList", Background = shade, MinWidth = width, MaxWidth = width}, head)
+        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self"}, hg)
         label:SetTextColor(RGB(230, 200, 120))
         label:SetText(g[1])
+        XWindow:new({MinHeight = 1, MaxHeight = 1, Margins = box(4, 0, 4, 0), Background = RGBA(230, 200, 120, 90)}, hg)
         head_groups[gi] = XWindow:new({LayoutMethod = "HList"}, hg)
-        body_groups[gi] = XWindow:new({LayoutMethod = "HList", Background = shade}, area)
+        body_groups[gi] = XWindow:new({LayoutMethod = "HList", Background = shade, MinWidth = width, MaxWidth = width}, area)
     end
     for i, col in ipairs(Columns) do
         local key = col[1]
-        Button(head_groups[col.group], col.label, function()
+        local btn = Button(head_groups[col.group], col.label, function()
             if State.sort == key then State.desc = not State.desc else State.sort, State.desc = key, not col.text end
             Render(dlg)
         end, {
@@ -501,15 +537,18 @@ local function Build()
             TextStyle = cell_style,
             MinWidth = col.width, MaxWidth = col.width,
             Padding = box(cell_pad, 2, cell_pad, 2),
+            LayoutMethod = "Box",
             Background = RGBA(0, 0, 0, 0),
             RolloverText = Untranslated(col[3]),
         })
+        btn.idLabel:SetHAlign(col.text and "left" or "right")
         XText:new({
             Id = "idCol" .. i,
             Translate = false,
             TextStyle = cell_style,
             MinWidth = col.width, MaxWidth = col.width,
             Padding = box(cell_pad, 0, cell_pad, 0),
+            TextHAlign = col.text and "left" or "right",
             WordWrap = false,
             Clip = "self",
         }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
