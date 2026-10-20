@@ -228,6 +228,8 @@ local Groups = {
             local burst, auto = BurstModes(w)
             return (burst or auto) and w.RPM
         end, prop = "RPM"},
+        {"Wgt", "Wgt", 4, "weigth_held_mul: above RecoilHeldPivot, unsupported fire loses control (Strength relieves it)",
+         function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul"},
     }},
     {"Drift", {
         {"BDrift", "Burst", 4, "Selective burst: how far the muzzle walked by the last round (3rd at most), arcmin. "
