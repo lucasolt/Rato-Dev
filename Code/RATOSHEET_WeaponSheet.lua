@@ -229,13 +229,13 @@ local Groups = {
          function(w, c) return Drift(w, c, "auto") end, lower = true},
     }},
     {"AP", {
-        {"AP", "Attack", 4, "Default attack AP (the selected merc prices it; else raw ShootAP)",
+        {"AP", "Attk", 4, "Default attack AP (the selected merc prices it; else raw ShootAP)",
          function(w, c) return AttackAP(w, c.ap_unit) end, lower = true},
         {"SAP", "Stance", 4, "Shooting stance + one aim level AP, priced for the shooter (stat 100 clears Cumbersome)",
          function(w, c) return StanceAP(w, c.unit) end, lower = true},
         {"Cmb", "Cmb", 3, "Cumbersome: extra stance AP below Strength " .. const.Combat.CumbersomeStanceAP_StrThreshold,
          function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true},
-        {"RAP", "Reload", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
+        {"RAP", "Rld", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
     }},
     {"Logistics", view = "overview", {
         {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
