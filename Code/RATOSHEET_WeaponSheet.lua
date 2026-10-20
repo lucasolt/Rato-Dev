@@ -495,8 +495,19 @@ local function Render(dlg)
         Stances[State.stance], SelectedUnit() and "" or " | select a merc to price AP"))
 end
 
+local recompute_delay = 700
+
+local function StopThreads(dlg)
+    for _, key in ipairs{"rat_delay", "rat_thread"} do
+        local thread = rawget(dlg, key)
+        if IsValidThread(thread) then DeleteThread(thread) end
+        rawset(dlg, key, false)
+    end
+end
+
+-- a run started from stale settings is dropped, not finished
 local function Recompute(dlg)
-    if rawget(dlg, "rat_thread") then return end
+    StopThreads(dlg)
     rawset(dlg, "rat_thread", CreateRealTimeThread(function()
         local unit = State.merc and SelectedUnit() or nil
         local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance], no_scope = State.no_scope,
@@ -523,6 +534,17 @@ local function Recompute(dlg)
             end
         end
         print("RatoWeaponSheet computed", #rows, "guns in", RealTime() - t0, "ms")
+    end))
+end
+
+-- knob presses wait for a pause, so cycling through options costs one run
+local function RecomputeSoon(dlg)
+    StopThreads(dlg)
+    SetStatus(dlg, "waiting for more changes ...")
+    rawset(dlg, "rat_delay", CreateRealTimeThread(function()
+        Sleep(recompute_delay)
+        rawset(dlg, "rat_delay", false)
+        Recompute(dlg)
     end))
 end
 
@@ -642,28 +664,28 @@ local function Build()
     merc_btn = Button(bar, "", function()
         State.merc = not State.merc
         merc_btn:SetText(State.merc and "Shooter: selected merc" or "Shooter: stat 100")
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Stat 100 = the gun alone, like the rollover's grey bracket")})
     merc_btn:SetText(State.merc and "Shooter: selected merc" or "Shooter: stat 100")
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
         stance_btn:SetText("Stance: " .. Stances[State.stance])
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Shooter stance for the CTH columns; the target is always standing")})
     stance_btn:SetText("Stance: " .. Stances[State.stance])
     local scope_btn
     scope_btn = Button(bar, "", function()
         State.no_scope = not State.no_scope
         scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = optic can't come off")})
     scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
     local bipod_btn
     bipod_btn = Button(bar, "", function()
         State.no_bipod = not State.no_bipod
         bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Removed: every bipod slot emptied, fixed MG bipods included")})
     bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
     Button(bar, "Recompute", function() Recompute(dlg) end)
@@ -686,13 +708,13 @@ local function Build()
     aim_btn = Button(bar2, "", function()
         State.aim = (State.aim + 1) % 4
         knob_texts()
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Aim level of the Autofire view, capped by the gun's MaxAimActions")})
     dist_btn = Button(bar2, "", function()
         local i = table.find(Distances, State.dist) or 0
         State.dist = Distances[i % #Distances + 1]
         knob_texts()
-        Recompute(dlg)
+        RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Target distance of the Autofire view; the target is always standing")})
     knob_texts()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
