@@ -38,7 +38,7 @@ local function Shooter(weapon, owner, stance)
     return s
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = false,
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true,
                view = "overview", aim = 3, dist = 10}
 
 local function Recoil(w, unit)
