@@ -140,7 +140,28 @@ local function Drift(w, c, kind)
     return Rat_EstimateBurst(prof, nil, nil, shots, samples).offset[shots]
 end
 
--- one fire mode at the sheet's aim and distance: {shots, sum of round CTH, expected damage, AP}, cached per row
+-- GatherCritChanceModifications without its situational parts (Settled, head/torso scopes, Flanked)
+local function CritChance(w, shooter, action_id, aim)
+    local crit = w.CritChance + Rat_CritPerAimCrit(w, shooter, action_id, aim)
+    if w:HasComponent("pso_dragunov_scope_critical") and aim > 1 then
+        crit = crit + const.Combat.Critical.PSOScopeCritOnAimed
+    end
+    if w:HasComponent("first_aim_crit") and aim > 0 then
+        crit = crit + const.Combat.Critical.FirstAimCrit
+    end
+    local flat = w.CritChance
+    return Clamp(flat + MulDivRound(crit - flat, Rat_CritFireModeMul(action_id, w), 100), 0, 100)
+end
+
+local function CritDamage(w, unit)
+    local bonus = const.Weapons.CriticalDamage + (w.CritDamage or 0)
+    if unit and HasPerk(unit, "ColdHeart") then
+        bonus = bonus + CharacterEffectDefs.ColdHeart:ResolveValue("crit_bonus")
+    end
+    return bonus
+end
+
+-- one fire mode at the sheet's aim and distance: {shots, sum of round CTH, crit %, expected damage, AP}, cached per row
 local function ModeStats(w, c, kind)
     if c[kind] ~= nil then return c[kind] or nil end
     c[kind] = false
@@ -162,7 +183,9 @@ local function ModeStats(w, c, kind)
     -- with aim, GetAPCost already adds the shooting stance and the aim levels
     local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
     ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
-    c[kind] = {shots = shots, sum = sum, dmg = MulDivRound(sum, w.Damage or 0, 100), ap = ap}
+    local crit = CritChance(w, c.shooter, kind == "auto" and Rat_AutoAttackId(w) or action.id, aim)
+    local per_hit = (w.Damage or 0) * 100 + MulDivRound((w.Damage or 0) * crit, CritDamage(w, c.unit), 100)
+    c[kind] = {shots = shots, sum = sum, crit = crit, dmg = MulDivRound(sum, per_hit, 100 * 100), ap = ap}
     return c[kind]
 end
 
@@ -269,7 +292,9 @@ local Groups = {
         {"A40", "Aim40", 4, "Full aim, 40 tiles", function(w, c) return ConeCTH(w, c.shooter, w.MaxAimActions or 3, 40) end},
     }},
     {"Single", view = "autofire", {
-        {"SDmg", "Dmg", 4, "Expected damage of one shot: hit chance x Damage (no crit, no armor)",
+        {"SCrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
+         function(w, c) return Field(w, c, "single", "crit") end},
+        {"SDmg", "Dmg", 4, "Expected damage of one shot: hit chance x Damage x (1 + crit x crit damage); no armor",
          function(w, c) return Field(w, c, "single", "dmg") end},
         {"S1AP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
          function(w, c) return Field(w, c, "single", "ap") end, lower = true},
@@ -279,7 +304,9 @@ local Groups = {
         {"BRds", "Rds", 3, "Rounds per burst", function(w, c) return Field(w, c, "burst", "shots") end, text = true},
         {"BHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
          function(w, c) return Field(w, c, "burst", "sum") end, fmt = Hundredths},
-        {"BDmg", "Dmg", 4, "Expected damage: hits x Damage (no crit, no armor)",
+        {"BCrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
+         function(w, c) return Field(w, c, "burst", "crit") end},
+        {"BDmg", "Dmg", 4, "Expected damage: hits x Damage x (1 + crit x crit damage); no armor",
          function(w, c) return Field(w, c, "burst", "dmg") end},
         {"BAP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
          function(w, c) return Field(w, c, "burst", "ap") end, lower = true},
@@ -288,7 +315,9 @@ local Groups = {
     {"Auto (3 rds)", view = "autofire", {
         {"AHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
          function(w, c) return Field(w, c, "auto", "sum") end, fmt = Hundredths},
-        {"ADmg", "Dmg", 4, "Expected damage: hits x Damage (no crit, no armor)",
+        {"ACrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
+         function(w, c) return Field(w, c, "auto", "crit") end},
+        {"ADmg", "Dmg", 4, "Expected damage: hits x Damage x (1 + crit x crit damage); no armor",
          function(w, c) return Field(w, c, "auto", "dmg") end},
         {"AAP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
          function(w, c) return Field(w, c, "auto", "ap") end, lower = true},
