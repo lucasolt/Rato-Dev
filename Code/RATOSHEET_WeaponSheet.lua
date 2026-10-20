@@ -38,7 +38,7 @@ local function Shooter(weapon, owner, stance)
     return s
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true,
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
                view = "overview", aim = 3, dist = 10}
 
 local function Recoil(w, unit)
@@ -58,8 +58,12 @@ local function ModeRecoil(w, unit, delta_prop, bump)
     return net
 end
 
-local function HipSnap(w, aim, unit)
+local function HipSnap(w, aim, unit, shooter)
     local mul = cRound(GetWeaponHipfireOrSnapshotMul(w, false, false, true, aim) * 100)
+    -- the unbraced bipod malus reads the shooter's stance, which the gun-alone call doesn't have
+    if aim > 0 and Rat_BipodUnbraced(shooter, w) then
+        mul = cRound(mul * const.Combat.Snapshot.Components.BipodUnbracedMul)
+    end
     return unit and MulDivRound(mul, Rat_StepAttrMul(unit, nil, aim), 100) or mul
 end
 
@@ -209,7 +213,8 @@ local Groups = {
         {"PB", "PB", 4, "Point blank bonus", function(w, c) return PB(w, c.unit) end,
          shown = function() return not IsACHTActive() end},
         {"Hip", "Hip%", 4, "Hipfire cone multiplier %", function(w, c) return HipSnap(w, 0, c.unit) end, lower = true},
-        {"Snap", "Snap%", 4, "Snapshot cone multiplier %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
+        {"Snap", "Snap%", 4, "Snapshot cone multiplier %, unbraced bipod included (shooter not prone)",
+         function(w, c) return HipSnap(w, 1, c.unit, c.shooter) end, lower = true},
         {"Rng", "Range", 4, "WeaponRange", function(w) return w.WeaponRange end, prop = "WeaponRange"},
     }},
     {"Kick (x100)", {
@@ -306,14 +311,24 @@ local function IsScope(id)
     end
 end
 
--- optic off: empty slot when allowed, else a non-scope option (ironsights first); false when the optic is integral
-local function StripScope(w)
+local BipodEffects = {"bipod_penalty", "AccuracyBonusProne", "RecoilControlWhenProne"}
+
+local function IsBipod(id)
+    local effects = id and WeaponComponents[id] and WeaponComponents[id].ModificationEffects or empty_table
+    for _, e in ipairs(BipodEffects) do
+        if table.find(effects, e) then return true end
+    end
+end
+
+-- part off: empty slot when allowed (or forced), else another option without it (`prefer` in the id first);
+-- false when integral
+local function StripPart(w, is_part, prefer, force)
     for _, slot in ipairs(w.ComponentSlots or empty_table) do
         local cur = w.components[slot.SlotType]
-        if IsScope(cur) then
-            local pick = slot.CanBeEmpty and ""
+        if is_part(cur) then
+            local pick = (slot.CanBeEmpty or force) and ""
             for _, id in ipairs(pick and empty_table or slot.AvailableComponents or empty_table) do
-                if not IsScope(id) and (not pick or id:find("ron")) then pick = id end
+                if not is_part(id) and (not pick or prefer and id:find(prefer)) then pick = id end
             end
             if not pick then return false end
             w:SetWeaponComponent(slot.SlotType, pick)
@@ -331,7 +346,8 @@ end
 local function ComputeRow(id, ctx)
     local w = PlaceInventoryItem(id)
     if not w then return end
-    local kept_scope = ctx.no_scope and not StripScope(w)
+    local kept_scope = ctx.no_scope and not StripPart(w, IsScope, "ron")
+    if ctx.no_bipod then StripPart(w, IsBipod, nil, true) end
     local ammo = Rat_BasicAmmoClass(w)
     for _, mod in ipairs(ammo and ammo.Modifications or empty_table) do
         w:AddModifier("ammo", mod.target_prop, mod.mod_mul, mod.mod_add)
@@ -483,7 +499,8 @@ local function Recompute(dlg)
     if rawget(dlg, "rat_thread") then return end
     rawset(dlg, "rat_thread", CreateRealTimeThread(function()
         local unit = State.merc and SelectedUnit() or nil
-        local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance], no_scope = State.no_scope}
+        local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance], no_scope = State.no_scope,
+                     no_bipod = State.no_bipod}
         local ids, rows = Ids(), {}
         local t0 = RealTime()
         for i, id in ipairs(ids) do
@@ -640,8 +657,15 @@ local function Build()
         State.no_scope = not State.no_scope
         scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
         Recompute(dlg)
-    end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = integral optic, kept")})
+    end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = optic can't come off")})
     scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
+    local bipod_btn
+    bipod_btn = Button(bar, "", function()
+        State.no_bipod = not State.no_bipod
+        bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
+        Recompute(dlg)
+    end, {RolloverText = Untranslated("Removed: every bipod slot emptied, fixed MG bipods included")})
+    bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
     Button(bar, "Recompute", function() Recompute(dlg) end)
     Button(bar, "Export CSV", function() ExportCSV(dlg) end,
         {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
