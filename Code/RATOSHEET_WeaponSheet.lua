@@ -4,7 +4,7 @@
 local sheet_id = "idRatoWeaponSheet"
 local csv_path = "AppData/RatoWeaponSheet.csv"
 local samples = 64
-local group_gap = 10
+local group_gap = 8
 local cell_style = "PDAIMPContentTextSmall"
 local char_w, cell_pad = 8, 3
 
@@ -188,10 +188,10 @@ end
 -- {key, label, data chars, tip, get(w, ctx), lower = smaller is better, fmt, text = not colored, prop = greyed at its Firearm default}
 local Groups = {
     {"Gun", {
-        {"Id", "Id", 15, "Preset id", function(w) return w.class end, text = true},
-        {"Name", "Name", 11, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
+        {"Id", "Id", 14, "Preset id", function(w) return w.class end, text = true},
+        {"Name", "Name", 10, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
         {"Cls", "Class", 6, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
-        {"Cal", "Caliber", 9, "Caliber", function(w) return w.Caliber or "" end, text = true},
+        {"Cal", "Caliber", 8, "Caliber", function(w) return w.Caliber or "" end, text = true},
         {"Src", "Src", 3, "V = vanilla, T = ToG patched", function(w) return w.is_tog_patched and "T" or "V" end, text = true},
     }},
     {"Damage", {
@@ -245,6 +245,10 @@ local Groups = {
         {"Cmb", "Cmb", 3, "Cumbersome: extra stance AP below Strength " .. const.Combat.CumbersomeStanceAP_StrThreshold,
          function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true},
         {"RAP", "Rld", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
+        {"AimRec", "+Aim", 4, "After one single shot, every aim level of the next attack costs this much more AP "
+            .. "(Rat_recoil stack 1, Rat_GetRecoilAimCost)", function(w, c)
+            return cRound(Rat_GetRecoilAimCost(c.unit or c.shooter, CombatActions.SingleShot, w, 1))
+        end, lower = true},
     }},
     {"Logistics", view = "overview", {
         {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
@@ -254,7 +258,7 @@ local Groups = {
          fmt = function(v) return string.format("%d.%d", v / 1000, v % 1000 / 100) end},
         {"Brl", "Brl", 4, "Effective barrel length, mm (components applied)",
          function(w) return (w.rat_barrel_len or 0) > 0 and Rat_EffectiveBarrelLength(w) end},
-        {"Cost", "Cost", 6, "Cost", function(w) return w.Cost end, lower = true},
+        {"Cost", "Cost", 5, "Cost", function(w) return w.Cost end, lower = true},
     }},
     {"Hit % (standing)", view = "overview", {
         {"H5", "Hip5", 4, "Hipfire (aim 0), 5 tiles", function(w, c) return ConeCTH(w, c.shooter, 0, 5) end},
