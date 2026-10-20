@@ -344,11 +344,16 @@ local function ComputeRow(id, ctx)
     return row
 end
 
+-- skins and variants of a gun already listed
+local Duplicates = {Type56B_1 = true, Type56C_1 = true, Type56D_1 = true, HK23ECamo_1 = true, Papovka2SKS_1 = true}
+
 local function Ids()
     local ids = {}
     ForEachPreset("InventoryItemCompositeDef", function(p)
         local cls = g_Classes[p.id]
-        if Rat_IsLiveFirearm(cls) and not IsKindOf(cls, "HeavyWeapon") then ids[#ids + 1] = p.id end
+        if Rat_IsLiveFirearm(cls) and not IsKindOfClasses(cls, "HeavyWeapon", "FlareGun") and not Duplicates[p.id] then
+            ids[#ids + 1] = p.id
+        end
     end)
     table.sort(ids)
     return ids
