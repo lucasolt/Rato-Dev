@@ -201,11 +201,13 @@ local Groups = {
     {"Accuracy", {
         {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end,
          fmt = function(v) return tostring(MulDivRound(v, 1, 100)) end},
-        {"Hand", "Handl", 4, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end, prop = "Handling"},
+        {"Hand", "Handl", 4, "Handling, effective points", function(w, c) return (Rat_HandlingEffectivePoints(w, c.unit)) end, prop = "Handling",
+         shown = function() return IsACHTActive() end},
         {"AimH", "3Aim+H", 5, "(Aim x 3 + Handling) / 3: accuracy per aim level over 3 aim levels",
          function(w, c) return MulDivRound(Aim(w, c.unit) * 3 + Rat_HandlingEffectivePoints(w, c.unit) * 100, 1, 3) end,
-         fmt = Hundredths},
-        {"PB", "PB", 4, "Point blank bonus", function(w, c) return PB(w, c.unit) end},
+         fmt = Hundredths, shown = function() return IsACHTActive() end},
+        {"PB", "PB", 4, "Point blank bonus", function(w, c) return PB(w, c.unit) end,
+         shown = function() return not IsACHTActive() end},
         {"Hip", "Hip%", 4, "Hipfire cone multiplier %", function(w, c) return HipSnap(w, 0, c.unit) end, lower = true},
         {"Snap", "Snap%", 4, "Snapshot cone multiplier %", function(w, c) return HipSnap(w, 1, c.unit) end, lower = true},
         {"Rng", "Range", 4, "WeaponRange", function(w) return w.WeaponRange end, prop = "WeaponRange"},
@@ -435,34 +437,41 @@ local function UpdateHover(dlg, pt)
     hl:SetVisible(true)
 end
 
+-- columns of the other CTH model are not built (aCTH: Handling; old CTH: PB)
+local function Shown(col)
+    return not col.shown or col.shown()
+end
+
 local function Render(dlg)
     local rows = VisibleRows()
     rawset(dlg, "rat_nrows", #rows)
     for i, col in ipairs(Columns) do
-        local lo, hi
-        if not col.text then
-            for _, r in ipairs(rows) do
+        if dlg["idCol" .. i] then
+            local lo, hi
+            if not col.text then
+                for _, r in ipairs(rows) do
+                    local v = r[col[1]]
+                    if type(v) == "number" then lo, hi = Min(lo or v, v), Max(hi or v, v) end
+                end
+            end
+            local lines = {}
+            for k, r in ipairs(rows) do
                 local v = r[col[1]]
-                if type(v) == "number" then lo, hi = Min(lo or v, v), Max(hi or v, v) end
+                local s = CellText(col, v)
+                if row_default(r, col) then
+                    s = "<color 110 110 110>" .. s .. "</color>"
+                elseif type(v) == "number" and lo and hi > lo then
+                    local t = MulDivRound(v - lo, 1000, hi - lo)
+                    s = ScaleColor(col.lower and 1000 - t or t) .. s .. "</color>"
+                elseif k % 2 == 0 then
+                    s = "<color 175 175 175>" .. s .. "</color>"
+                end
+                lines[k] = s
             end
+            dlg["idCol" .. i]:SetText(table.concat(lines, "\n"))
+            local head = dlg["idHead" .. i]
+            head:SetTextColor(State.sort ~= col[1] and RGB(220, 220, 220) or State.desc and RGB(240, 190, 90) or RGB(120, 190, 240))
         end
-        local lines = {}
-        for k, r in ipairs(rows) do
-            local v = r[col[1]]
-            local s = CellText(col, v)
-            if row_default(r, col) then
-                s = "<color 110 110 110>" .. s .. "</color>"
-            elseif type(v) == "number" and lo and hi > lo then
-                local t = MulDivRound(v - lo, 1000, hi - lo)
-                s = ScaleColor(col.lower and 1000 - t or t) .. s .. "</color>"
-            elseif k % 2 == 0 then
-                s = "<color 175 175 175>" .. s .. "</color>"
-            end
-            lines[k] = s
-        end
-        dlg["idCol" .. i]:SetText(table.concat(lines, "\n"))
-        local head = dlg["idHead" .. i]
-        head:SetTextColor(State.sort ~= col[1] and RGB(220, 220, 220) or State.desc and RGB(240, 190, 90) or RGB(120, 190, 240))
     end
     SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s%s", #rows, #(State.rows or empty_table),
         Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
@@ -510,11 +519,15 @@ end
 local function ExportCSV(dlg)
     local out = {}
     local head = {}
-    for i, col in ipairs(Columns) do head[i] = col[1] end
+    local cols = {}
+    for _, col in ipairs(Columns) do
+        if Shown(col) then cols[#cols + 1] = col end
+    end
+    for i, col in ipairs(cols) do head[i] = col[1] end
     out[1] = table.concat(head, ",")
     for _, r in ipairs(VisibleRows()) do
         local cells = {}
-        for i, col in ipairs(Columns) do
+        for i, col in ipairs(cols) do
             local v = r[col[1]]
             if type(v) == "number" and col.fmt then v = col.fmt(v) end
             cells[i] = CsvCell(v)
@@ -684,7 +697,7 @@ local function Build()
     rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups})
     for gi, g in ipairs(Groups) do
         local width = 0
-        for _, col in ipairs(g[2]) do width = width + col.width end
+        for _, col in ipairs(g[2]) do width = width + (Shown(col) and col.width or 0) end
         -- head and body blocks share one width so a long group label can't shift the columns under it
         local hg = XWindow:new({LayoutMethod = "VList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, head)
         head_blocks[gi] = hg
@@ -696,31 +709,33 @@ local function Build()
         body_groups[gi] = XWindow:new({LayoutMethod = "HList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, area)
     end
     for i, col in ipairs(Columns) do
-        local key = col[1]
-        local btn = Button(head_groups[col.group], col.label, function()
-            if State.sort == key then State.desc = not State.desc else State.sort, State.desc = key, not col.text end
-            Render(dlg)
-        end, {
-            Id = "idHead" .. i,
-            TextStyle = cell_style,
-            MinWidth = col.width, MaxWidth = col.width,
-            Padding = box(cell_pad, 2, cell_pad, 2),
-            LayoutMethod = "Box",
-            Background = RGBA(0, 0, 0, 0),
-            RolloverText = Untranslated(col[3]),
-        })
-        btn.idLabel:SetHAlign(col.text and "left" or "right")
-        XText:new({
-            Id = "idCol" .. i,
-            Translate = false,
-            TextStyle = cell_style,
-            MinWidth = col.width, MaxWidth = col.width,
-            Padding = box(cell_pad, 0, cell_pad, 0),
-            TextHAlign = col.text and "left" or "right",
-            WordWrap = false,
-            -- "self" would replace the list's clip rect, letting scrolled rows paint over the header
-            Clip = "parent & self",
-        }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
+        if Shown(col) then
+            local key = col[1]
+            local btn = Button(head_groups[col.group], col.label, function()
+                if State.sort == key then State.desc = not State.desc else State.sort, State.desc = key, not col.text end
+                Render(dlg)
+            end, {
+                Id = "idHead" .. i,
+                TextStyle = cell_style,
+                MinWidth = col.width, MaxWidth = col.width,
+                Padding = box(cell_pad, 2, cell_pad, 2),
+                LayoutMethod = "Box",
+                Background = RGBA(0, 0, 0, 0),
+                RolloverText = Untranslated(col[3]),
+            })
+            btn.idLabel:SetHAlign(col.text and "left" or "right")
+            XText:new({
+                Id = "idCol" .. i,
+                Translate = false,
+                TextStyle = cell_style,
+                MinWidth = col.width, MaxWidth = col.width,
+                Padding = box(cell_pad, 0, cell_pad, 0),
+                TextHAlign = col.text and "left" or "right",
+                WordWrap = false,
+                -- "self" would replace the list's clip rect, letting scrolled rows paint over the header
+                Clip = "parent & self",
+            }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
+        end
     end
     dlg.OnMousePos = function(self, pt)
         UpdateHover(self, pt)
