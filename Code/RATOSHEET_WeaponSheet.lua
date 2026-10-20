@@ -612,6 +612,25 @@ ApplyView = function(dlg)
     end
 end
 
+local KnobIdle = RGBA(60, 60, 60, 220)
+-- a knob off its usual setting gets its own color, so the active filters read at a glance
+local KnobColors = {
+    class = RGBA(150, 120, 40, 255),
+    merc = RGBA(50, 90, 160, 255),
+    stance = RGBA(110, 60, 140, 255),
+    scope = RGBA(30, 115, 130, 255),
+    bipod = RGBA(160, 75, 40, 255),
+    view = RGBA(50, 125, 70, 255),
+    aim = RGBA(130, 55, 80, 255),
+    dist = RGBA(90, 100, 50, 255),
+}
+
+local function Knob(btn, text, active, color)
+    btn:SetText(text)
+    btn:SetBackground(active and color or KnobIdle)
+    btn:SetTextColor(active and RGB(245, 245, 245) or TextStyles[btn.TextStyle].TextColor)
+end
+
 local function Build()
     local dlg = XWindow:new({
         Id = sheet_id,
@@ -656,38 +675,38 @@ local function Build()
     cls_btn = Button(bar, "Class: all", function()
         local i = (table.find(cls_list, State.cls) or 1) % #cls_list + 1
         State.cls = cls_list[i]
-        cls_btn:SetText("Class: " .. (State.cls or "all"))
+        Knob(cls_btn, "Class: " .. (State.cls or "all"), State.cls, KnobColors.class)
         Render(dlg)
     end)
-    cls_btn:SetText("Class: " .. (State.cls or "all"))
+    Knob(cls_btn, "Class: " .. (State.cls or "all"), State.cls, KnobColors.class)
     local merc_btn
     merc_btn = Button(bar, "", function()
         State.merc = not State.merc
-        merc_btn:SetText(State.merc and "Shooter: selected merc" or "Shooter: stat 100")
+        Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
         RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Stat 100 = the gun alone, like the rollover's grey bracket")})
-    merc_btn:SetText(State.merc and "Shooter: selected merc" or "Shooter: stat 100")
+    Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
-        stance_btn:SetText("Stance: " .. Stances[State.stance])
+        Knob(stance_btn, "Stance: " .. Stances[State.stance], State.stance ~= 1, KnobColors.stance)
         RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Shooter stance for the CTH columns; the target is always standing")})
-    stance_btn:SetText("Stance: " .. Stances[State.stance])
+    Knob(stance_btn, "Stance: " .. Stances[State.stance], State.stance ~= 1, KnobColors.stance)
     local scope_btn
     scope_btn = Button(bar, "", function()
         State.no_scope = not State.no_scope
-        scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
+        Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
         RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = optic can't come off")})
-    scope_btn:SetText(State.no_scope and "Scopes: removed" or "Scopes: default")
+    Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
     local bipod_btn
     bipod_btn = Button(bar, "", function()
         State.no_bipod = not State.no_bipod
-        bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
+        Knob(bipod_btn, State.no_bipod and "Bipods: removed" or "Bipods: default", State.no_bipod, KnobColors.bipod)
         RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Removed: every bipod slot emptied, fixed MG bipods included")})
-    bipod_btn:SetText(State.no_bipod and "Bipods: removed" or "Bipods: default")
+    Knob(bipod_btn, State.no_bipod and "Bipods: removed" or "Bipods: default", State.no_bipod, KnobColors.bipod)
     Button(bar, "Recompute", function() Recompute(dlg) end)
     Button(bar, "Export CSV", function() ExportCSV(dlg) end,
         {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
@@ -696,9 +715,10 @@ local function Build()
     local bar2 = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top", Margins = box(0, 6, 0, 0)}, dlg)
     local view_btn, aim_btn, dist_btn
     local function knob_texts()
-        view_btn:SetText(State.view == "autofire" and "View: Autofire" or "View: Overview")
-        aim_btn:SetText("Aim: " .. State.aim)
-        dist_btn:SetText("Dist: " .. State.dist .. " tiles")
+        Knob(view_btn, State.view == "autofire" and "View: Autofire" or "View: Overview", State.view == "autofire",
+             KnobColors.view)
+        Knob(aim_btn, "Aim: " .. State.aim, State.aim ~= 3, KnobColors.aim)
+        Knob(dist_btn, "Dist: " .. State.dist .. " tiles", State.dist ~= 10, KnobColors.dist)
     end
     view_btn = Button(bar2, "", function()
         State.view = State.view == "autofire" and "overview" or "autofire"
