@@ -613,19 +613,25 @@ local function Render(dlg)
         Stances[State.stance], SelectedUnit() and "" or " | select a merc to price AP"))
 end
 
-local recompute_delay = 700
-
 local function StopThreads(dlg)
-    for _, key in ipairs{"rat_delay", "rat_thread"} do
-        local thread = rawget(dlg, key)
-        if IsValidThread(thread) then DeleteThread(thread) end
-        rawset(dlg, key, false)
-    end
+    local thread = rawget(dlg, "rat_thread")
+    if IsValidThread(thread) then DeleteThread(thread) end
+    rawset(dlg, "rat_thread", false)
 end
 
 -- a run started from stale settings is dropped, not finished
+local function SetPending(dlg, pending)
+    rawset(dlg, "rat_pending", pending)
+    local btn = dlg.idApply
+    if not btn then return end
+    btn:SetText(pending and "Apply changes" or "Recompute")
+    btn:SetBackground(pending and RGBA(190, 60, 40, 255) or RGBA(60, 60, 60, 220))
+    btn:SetTextColor(pending and RGB(255, 255, 255) or TextStyles[btn.TextStyle].TextColor)
+end
+
 local function Recompute(dlg)
     StopThreads(dlg)
+    SetPending(dlg, false)
     rawset(dlg, "rat_thread", CreateRealTimeThread(function()
         local unit = State.merc and SelectedUnit() or nil
         local ctx = {unit = unit, ap_unit = SelectedUnit(), stance = Stances[State.stance], no_scope = State.no_scope, view = State.view,
@@ -655,15 +661,10 @@ local function Recompute(dlg)
     end))
 end
 
--- knob presses wait for a pause, so cycling through options costs one run
-local function RecomputeSoon(dlg)
-    StopThreads(dlg)
-    SetStatus(dlg, "waiting for more changes ...")
-    rawset(dlg, "rat_delay", CreateRealTimeThread(function()
-        Sleep(recompute_delay)
-        rawset(dlg, "rat_delay", false)
-        Recompute(dlg)
-    end))
+-- knobs only flag the rows stale; the Apply button recomputes, so cycling options costs nothing
+local function MarkPending(dlg)
+    SetPending(dlg, true)
+    SetStatus(dlg, "changes pending: press Apply changes")
 end
 
 local function CsvCell(v)
@@ -812,31 +813,31 @@ local function Build()
     merc_btn = Button(bar, "", function()
         State.merc = not State.merc
         Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Stat 100 = the gun alone, like the rollover's grey bracket")})
     Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
         Knob(stance_btn, "Stance: " .. Stances[State.stance], State.stance ~= 1, KnobColors.stance)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Shooter stance for the CTH columns; the target is always standing")})
     Knob(stance_btn, "Stance: " .. Stances[State.stance], State.stance ~= 1, KnobColors.stance)
     local scope_btn
     scope_btn = Button(bar, "", function()
         State.no_scope = not State.no_scope
         Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = optic can't come off")})
     Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
     local bipod_btn
     bipod_btn = Button(bar, "", function()
         State.no_bipod = not State.no_bipod
         Knob(bipod_btn, State.no_bipod and "Bipods: removed" or "Bipods: default", State.no_bipod, KnobColors.bipod)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Removed: every bipod slot emptied, fixed MG bipods included")})
     Knob(bipod_btn, State.no_bipod and "Bipods: removed" or "Bipods: default", State.no_bipod, KnobColors.bipod)
-    Button(bar, "Recompute", function() Recompute(dlg) end)
+    Button(bar, "Recompute", function() Recompute(dlg) end, {Id = "idApply"})
     Button(bar, "Export CSV", function() ExportCSV(dlg) end,
         {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
     Button(bar, "Close", function() dlg:Close() end)
@@ -854,26 +855,26 @@ local function Build()
         State.view = Views[(table.find(Views, State.view) or 0) % #Views + 1]
         knob_texts()
         ApplyView(dlg)
-        if State.rows and State.rows_view ~= State.view then RecomputeSoon(dlg) end
+        if State.rows and State.rows_view ~= State.view then MarkPending(dlg) end
     end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP. D/AP by rounds (at Dist) and by distance (at Auto rounds)")})
     aim_btn = Button(bar2, "", function()
         State.aim = (State.aim + 1) % 4
         knob_texts()
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Aim level of the Autofire view, capped by the gun's MaxAimActions")})
     dist_btn = Button(bar2, "", function()
         local i = table.find(Distances, State.dist) or 0
         State.dist = Distances[i % #Distances + 1]
         knob_texts()
         ApplyView(dlg)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Target distance of the Autofire view and of D/AP by rounds; the target is always standing")})
     auto_btn = Button(bar2, "", function()
         local i = table.find(AutoRounds, State.auto) or 0
         State.auto = AutoRounds[i % #AutoRounds + 1]
         knob_texts()
         ApplyView(dlg)
-        RecomputeSoon(dlg)
+        MarkPending(dlg)
     end, {RolloverText = Untranslated("Rounds of the Autofire view's Auto block and of D/AP by distance, capped by each gun's magazine")})
     knob_texts()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
