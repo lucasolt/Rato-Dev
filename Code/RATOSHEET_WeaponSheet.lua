@@ -38,7 +38,7 @@ local function Shooter(weapon, owner, stance)
 end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
-               view = "overview", aim = 3, dist = 10, auto = 3, collapsed = {}}
+               view = "overview", aim = 3, dist = 10, auto = 3, stance_ap = true, collapsed = {}}
 
 local function Recoil(w, unit)
     local recoil = GetWepRecoil(w, unit, true) * GetCaliberStrRecoil(w, unit or FullStats)
@@ -161,6 +161,18 @@ local function CritDamage(w, unit)
     return bonus
 end
 
+-- shooting stance entry in whole AP at the sheet's stance; GetWeapon_StanceAP reads the merc's real stance for the bipod deploy
+local function StanceEntryAP(w, c)
+    local u = c.ap_unit
+    local raw = GetWeapon_StanceAP(u, w, true)
+    if w:HasComponent("rotate_ap_bipod") then
+        local bipod = const.Combat.BipodProneStanceAP * const.Scale.AP
+        local want, has = c.shooter.stance == "Prone", u.stance == "Prone"
+        if want and not has then raw = raw + bipod elseif has and not want then raw = raw - bipod end
+    end
+    return MulDivRound(raw, 1, const.Scale.AP)
+end
+
 -- one fire mode at the sheet's aim (or `aim`): {shots, sum of round CTH, crit %, expected damage, AP}, cached per row
 local function Stats(w, c, kind, n, dist, aim)
     if kind == "auto" then n = Min(n, w.MagazineSize or n) end
@@ -183,9 +195,10 @@ local function Stats(w, c, kind, n, dist, aim)
             sum = sum + Clamp(est.cth[i] or 0, a.MinCTH, a.MaxCTH)
         end
     end
-    -- with aim, GetAPCost already adds the shooting stance and the aim levels
+    -- GetAPCost adds the aim levels; out of combat it prices the shooting stance at 0, so the Stance AP knob adds it
     local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
     ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
+    if ap and aim > 0 and State.stance_ap then ap = ap + StanceEntryAP(w, c) end
     -- GetAPCost adds the cycle only to an unbolted gun; the leverage view charges it on every single shot
     if ap and kind == "single" and c.cycle_ap then ap = ap + c.cycle_ap end
     local crit = CritChance(w, c.shooter, kind == "auto" and Rat_AutoAttackId(w) or action.id, aim)
@@ -395,6 +408,44 @@ for _, mode in ipairs{{"single", "S", "Single D/AP by distance"}, {"burst", "B",
     end
     Groups[#Groups + 1] = {name, view = "distance", cols,
         title = kind == "auto" and function() return "Auto D/AP by distance (" .. State.auto .. " rds)" end or nil}
+end
+
+-- turn budget view: highest aim one attack still affords after walking N tiles and shouldering, on the selected merc's full AP
+local TurnMoves = {0, 2, 4, 6, 8}
+
+local function TurnAim(w, c, kind, tiles)
+    local u = c.ap_unit
+    local action = u and ModeAction(w, kind, State.auto)
+    if not action then return end
+    local budget = MulDivRound(u:GetMaxActionPoints() - tiles * GetSpecialMoveAPCost("Walk"), 1, const.Scale.AP)
+    for aim = w.MaxAimActions or 3, 0, -1 do
+        local ap = action:GetAPCost(u, {weapon = w, aim = aim})
+        if ap and ap >= 0 then
+            -- hipfire needs no stance
+            ap = MulDivRound(ap, 1, const.Scale.AP) + (aim > 0 and StanceEntryAP(w, c) or 0)
+            if ap <= budget then return aim end
+        end
+    end
+    return -1
+end
+
+local function AimLevel(v)
+    return v < 0 and "x" or v == 0 and "hip" or tostring(v)
+end
+
+local turn_note = " Walk cost per tile from GetSpecialMoveAPCost; the stance is paid whenever aim > 0. x = can't fire, hip = hipfire only."
+for _, mode in ipairs{{"single", "S", "Single"}, {"burst", "B", "Burst"}, {"auto", "A", "Auto"}} do
+    local kind, key, name = mode[1], mode[2], mode[3]
+    local cols = {}
+    for _, t in ipairs(TurnMoves) do
+        cols[#cols + 1] = {"T" .. key .. t, t .. "t", 4, name .. ": highest aim after walking " .. t .. " tiles." .. turn_note,
+            function(w, c) return TurnAim(w, c, kind, t) end, fmt = AimLevel}
+    end
+    Groups[#Groups + 1] = {"Turn" .. name, view = "turn", cols, title = function()
+        local u = SelectedObj
+        local tail = kind == "auto" and " (" .. State.auto .. " rds)" or ""
+        return name .. tail .. ": aim after walking" .. (IsKindOf(u, "Unit") and " (" .. MulDivRound(u:GetMaxActionPoints(), 1, const.Scale.AP) .. " AP)" or "")
+    end}
 end
 
 -- stat leverage view: one stat swung 50 -> 90 off a 70 base (Marks 80); AP priced on the selected merc with its stats overridden
@@ -779,7 +830,7 @@ local function Shown(col)
     return not col.shown or col.shown()
 end
 
-local CurveViews = {rounds = true, distance = true, stats = true}
+local CurveViews = {rounds = true, distance = true, stats = true, turn = true}
 
 -- curve views hide the always-on groups but Gun
 local function GroupShown(gi)
@@ -929,9 +980,9 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
-local Views = {"overview", "autofire", "rounds", "distance", "stats"}
+local Views = {"overview", "autofire", "rounds", "distance", "stats", "turn"}
 local ViewNames = {overview = "Overview", autofire = "Autofire", rounds = "D/AP by rounds", distance = "D/AP by distance",
-                   stats = "Stat leverage"}
+                   stats = "Stat leverage", turn = "Turn budget"}
 local collapsed_w = 5 * char_w + 2 * cell_pad
 
 -- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
@@ -979,6 +1030,7 @@ local KnobColors = {
     aim = RGBA(130, 55, 80, 255),
     dist = RGBA(90, 100, 50, 255),
     auto = RGBA(140, 90, 40, 255),
+    stance_ap = RGBA(40, 110, 110, 255),
 }
 
 local function Knob(btn, text, active, color)
@@ -1069,9 +1121,10 @@ local function Build()
     Button(bar, "Close", function() dlg:Close() end)
 
     local bar2 = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top", Margins = box(0, 6, 0, 0)}, dlg)
-    local view_btn, aim_btn, dist_btn, auto_btn
+    local view_btn, aim_btn, dist_btn, auto_btn, stance_ap_btn
     local function knob_texts()
         Knob(auto_btn, "Auto: " .. State.auto .. " rds", State.auto ~= 3, KnobColors.auto)
+        Knob(stance_ap_btn, State.stance_ap and "Stance AP: paid" or "Stance AP: free", not State.stance_ap, KnobColors.stance_ap)
         Knob(view_btn, "View: " .. ViewNames[State.view], State.view ~= "overview",
              KnobColors.view)
         Knob(aim_btn, "Aim: " .. State.aim, State.aim ~= 3, KnobColors.aim)
@@ -1102,6 +1155,12 @@ local function Build()
         ApplyView(dlg)
         MarkPending(dlg)
     end, {RolloverText = Untranslated("Rounds of the Autofire view's Auto block and of D/AP by distance, capped by each gun's magazine")})
+    stance_ap_btn = Button(bar2, "", function()
+        State.stance_ap = not State.stance_ap
+        knob_texts()
+        MarkPending(dlg)
+    end, {RolloverText = Untranslated("Paid: every aimed attack's AP includes entering the shooting stance (out of combat the game prices it at 0). "
+        .. "Free: already in stance, as for a follow-up attack")})
     knob_texts()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
         :SetTextColor(RGB(200, 180, 120))
