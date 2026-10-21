@@ -39,7 +39,7 @@ local function Shooter(weapon, owner, stance)
 end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
-               view = "overview", aim = 3, dist = 10}
+               view = "overview", aim = 3, dist = 10, collapsed = {}}
 
 local function Recoil(w, unit)
     local recoil = GetWepRecoil(w, unit, true) * GetCaliberStrRecoil(w, unit or FullStats)
@@ -628,8 +628,9 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
+local collapsed_w = 5 * char_w + 2 * cell_pad
 
--- shows the view's groups; shading alternates over the visible ones only
+-- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
 ApplyView = function(dlg)
     local blocks = rawget(dlg, "rat_blocks")
     local n = 0
@@ -640,10 +641,17 @@ ApplyView = function(dlg)
             n = n + 1
             if n % 2 == 0 then shade = RGBA(255, 255, 255, 12) end
         end
+        local folded = State.collapsed[gi]
+        local width = folded and collapsed_w or blocks.width[gi]
         for _, win in ipairs{blocks.head[gi], blocks.body[gi]} do
             win:SetVisible(show)
             win:SetBackground(shade)
+            win:SetMinWidth(width)
+            win:SetMaxWidth(width)
         end
+        blocks.cols[gi]:SetVisible(not folded)
+        for _, col in ipairs(blocks.body[gi]) do col:SetVisible(not folded) end
+        blocks.label[gi]:SetText(folded and g[1]:sub(1, 3) .. "+" or g[1])
     end
 end
 
@@ -794,19 +802,30 @@ local function Build()
         LayoutHSpacing = group_gap,
         MouseWheelStep = 80,
     }, list_box)
-    local head_groups, body_groups, head_blocks = {}, {}, {}
-    rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups})
+    local head_groups, body_groups, head_blocks, widths, labels = {}, {}, {}, {}, {}
+    rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups, cols = head_groups, width = widths, label = labels})
     for gi, g in ipairs(Groups) do
         local width = 0
         for _, col in ipairs(g[2]) do width = width + (Shown(col) and col.width or 0) end
         -- head and body blocks share one width so a long group label can't shift the columns under it
         local hg = XWindow:new({LayoutMethod = "VList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, head)
         head_blocks[gi] = hg
-        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self", WordWrap = false}, hg)
+        widths[gi] = width
+        local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self", WordWrap = false,
+                                 HandleMouse = gi > 1, RolloverText = gi > 1 and Untranslated(g[1] .. ": click to collapse / expand") or nil}, hg)
+        labels[gi] = label
         label:SetTextColor(RGB(230, 200, 120))
         label:SetText(g[1])
+        if gi > 1 then
+            label.OnMouseButtonDown = function(self, pt, button)
+                if button ~= "L" then return end
+                State.collapsed[gi] = not State.collapsed[gi] or nil
+                ApplyView(dlg)
+                return "break"
+            end
+        end
         XWindow:new({MinHeight = 1, MaxHeight = 1, Margins = box(4, 0, 4, 0), Background = RGBA(230, 200, 120, 90)}, hg)
-        head_groups[gi] = XWindow:new({LayoutMethod = "HList"}, hg)
+        head_groups[gi] = XWindow:new({LayoutMethod = "HList", FoldWhenHidden = true}, hg)
         body_groups[gi] = XWindow:new({LayoutMethod = "HList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, area)
     end
     for i, col in ipairs(Columns) do
@@ -833,6 +852,7 @@ local function Build()
                 Padding = box(cell_pad, 0, cell_pad, 0),
                 TextHAlign = col.text and "left" or "right",
                 WordWrap = false,
+                FoldWhenHidden = true,
                 -- "self" would replace the list's clip rect, letting scrolled rows paint over the header
                 Clip = "parent & self",
             }, body_groups[col.group]):SetTextColor(RGB(220, 220, 220))
