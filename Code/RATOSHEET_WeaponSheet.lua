@@ -484,6 +484,67 @@ Groups[#Groups + 1] = {"Archetypes", view = "stats", {
      end},
 }}
 
+-- what the leverage reads: gun inputs, and the base shooter's cone split into the share aim closes and the held-weight share
+local function LevShooter(w, c)
+    c.lev_shooter = c.lev_shooter or Shooter(w, LevBase, c.shooter.stance)
+    return c.lev_shooter
+end
+
+local function LevGaps(w, c)
+    if c.lev_gaps ~= nil then return c.lev_gaps or nil end
+    c.lev_gaps = false
+    local sh = LevShooter(w, c)
+    local _, _, parts = Rat_GetAperture(w, sh, nil, w.MaxAimActions or 3)
+    if not parts or not parts.pre_aim then return end
+    local gap = Max(0, parts.pre_aim - parts.floor)
+    local base_mul, gun_mul = parts.base_mul * 100, Rat_HandlingBaseMul(w, sh)
+    local gun = base_mul > gun_mul and Max(0, MulDivRound(parts.pre_aim, gun_mul, base_mul) - parts.floor) or gap
+    c.lev_gaps = {gun = gun, held = gap - gun}
+    return c.lev_gaps
+end
+
+local function LevHeldPen(w, c, str)
+    return (Rat_HeldWeightPen(w, {Strength = str}, c.shooter.stance, const.Combat.Aperture.HandlingHeldSlope))
+end
+
+local function LevCycle(w, c)
+    local u = c.ap_unit
+    if not u or not rat_canBolt(w) then return end
+    local saved = u.Dexterity
+    local ap = {}
+    for i, dex in ipairs{50, 90} do
+        u.Dexterity = dex
+        local ok, v = pcall(rat_get_manual_cyclingAP, u, w, true)
+        ap[i] = ok and MulDivRound(v, 1, const.Scale.AP) or "?"
+    end
+    u.Dexterity = saved
+    return ap[1] .. "/" .. ap[2]
+end
+
+Groups[#Groups + 1] = {"Dex drivers", view = "stats", {
+    {"LvAim", "Aim", 4, "AimAccuracy per level before Hand-Eye, components applied: how hard each aim level closes the gap. Hand-Eye scales it",
+     function(w) return Aim(w) end, fmt = function(v) return tostring(MulDivRound(v, 1, 100)) end},
+    {"LvGap", "Gap", 4, "Cone the aim closes: sigma before aim minus the floor, held-weight share left out (base shooter, sheet stance). "
+        .. "Dex leverage grows with it", function(w, c) local g = LevGaps(w, c) return g and g.gun end, lower = true},
+    {"LvCPA", "C/Aim", 4, "Crit per aim level before Hand-Eye", function(w) return Rat_WeaponCritPerAim(w) end, fmt = Hundredths,
+     prop = "CritPerAim"},
+    {"LvSnap", "Snap%", 4, "Snapshot cone multiplier % before Reflexes (base shooter, sheet stance): Reflexes shrink the step",
+     function(w, c) return HipSnap(w, 1, nil, LevShooter(w, c)) end, lower = true},
+    {"LvCyc", "Cycle", 5, "Bolt cycling AP per shot at Dex 50 / 90", LevCycle, text = true},
+}}
+Groups[#Groups + 1] = {"Str drivers", view = "stats", {
+    {"LvBP", "StrBP", 5, "Caliber Strength breakpoint: below it the recoil control falls off fast", function(w) return (Recoil_StrBreakpoint(w)) end},
+    {"LvKick", "Kick", 4, "Single kick at Strength 100 (x100): the gun's own push", function(w) return Recoil(w) end, lower = true},
+    {"LvWgt", "Wgt", 4, "weigth_held_mul (pivot " .. tostring(const.Combat.Aperture.HeldPivot) .. ")", function(w) return w.weigth_held_mul end,
+     lower = true, prop = "weigth_held_mul"},
+    {"LvHeld", "Held", 4, "Held-weight share of the base shooter's cone: closes at a fixed Hand-Eye, only Strength lifts it",
+     function(w, c) local g = LevGaps(w, c) return g and g.held end, lower = true},
+    {"LvH50", "Hld50", 5, "Held-weight cone malus % at Str 50, sheet stance", function(w, c) return LevHeldPen(w, c, 50) end, lower = true},
+    {"LvH90", "Hld90", 5, "Held-weight cone malus % at Str 90, sheet stance", function(w, c) return LevHeldPen(w, c, 90) end, lower = true},
+    {"LvCmb", "Cmb", 3, "Cumbersome: extra stance AP below Strength " .. const.Combat.CumbersomeStanceAP_StrThreshold,
+     function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true},
+}}
+
 local Columns = {}
 for gi, g in ipairs(Groups) do
     for _, col in ipairs(g[2]) do
