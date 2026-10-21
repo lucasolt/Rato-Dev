@@ -243,21 +243,27 @@ local function Hundredths(v)
 end
 
 -- {key, label, data chars, tip, get(w, ctx), lower = smaller is better, fmt, text = not colored, prop = greyed at its Firearm default}
+-- columns the Autofire view drops so it fits one screen
+local NotAuto = {autofire = true}
+
 local Groups = {
-    {"Gun", {
-        {"Id", "Id", 14, "Preset id", function(w) return w.class end, text = true},
-        {"Name", "Name", 10, "Display name", function(w) return _InternalTranslate(w.DisplayName or "") end, text = true},
+    {"Gun", always = true, {
+        {"Name", "Name", 10, "Display name; * = optic can't come off", function(w) return _InternalTranslate(w.DisplayName or "") end,
+         text = true},
         {"Cls", "Class", 6, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
         {"Cal", "Caliber", 8, "Caliber", function(w) return w.Caliber or "" end, text = true},
-        {"Src", "Src", 3, "V = vanilla, T = ToG patched", function(w) return w.is_tog_patched and "T" or "V" end, text = true},
+    }},
+    {"Id", always = true, collapsed = true, {
+        {"Id", "Id", 14, "Preset id", function(w) return w.class end, text = true},
     }},
     {"Damage", {
         {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end},
         {"Crit", "Crit", 4, "CritChance, Basic ammo loaded", function(w) return w.CritChance end, prop = "CritChance"},
         {"CPA", "C/Aim", 4, "Crit chance per aim level (Rat_WeaponCritPerAim x Hand-Eye)",
          function(w, c) return MulDivRound(Rat_WeaponCritPerAim(w), c.unit and rGetHandEyeCoordination(c.unit) or 100, 100) end,
-         fmt = Hundredths, prop = "CritPerAim"},
-        {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end},
+         fmt = Hundredths, prop = "CritPerAim", hide_in = NotAuto},
+        {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end,
+         hide_in = NotAuto},
     }},
     {"Accuracy", {
         {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end,
@@ -288,7 +294,7 @@ local Groups = {
         {"Wgt", "Wgt", 4, "weigth_held_mul: above RecoilHeldPivot, unsupported fire loses control (Strength relieves it)",
          function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul"},
     }},
-    {"Drift", {
+    {"Drift", hide_in = NotAuto, {
         {"BDrift", "Burst", 4, "Selective burst: how far the muzzle walked by the last round (3rd at most), arcmin. "
             .. "Kick, RPM, weight, Strength, stance and bipod; no cone", function(w, c) return Drift(w, c, "burst") end, lower = true},
         {"ADrift", "Auto", 4, "3-round autofire: how far the muzzle walked by the 3rd round, arcmin",
@@ -300,12 +306,13 @@ local Groups = {
         {"SAP", "Stance", 4, "Shooting stance + one aim level AP, priced for the shooter (stat 100 clears Cumbersome)",
          function(w, c) return StanceAP(w, c.unit) end, lower = true},
         {"Cmb", "Cmb", 3, "Cumbersome: extra stance AP below Strength " .. const.Combat.CumbersomeStanceAP_StrThreshold,
-         function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true},
-        {"RAP", "Rld", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true},
+         function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true, hide_in = NotAuto},
+        {"RAP", "Rld", 4, "Reload AP", function(w) return MulDivRound(w.ReloadAP or 0, 1, const.Scale.AP) end, lower = true,
+         hide_in = NotAuto},
         {"AimRec", "+Aim", 4, "After one single shot, every aim level of the next attack costs this much more AP "
             .. "(Rat_recoil stack 1, Rat_GetRecoilAimCost)", function(w, c)
             return cRound(Rat_GetRecoilAimCost(c.unit or c.shooter, CombatActions.SingleShot, w, 1))
-        end, lower = true},
+        end, lower = true, hide_in = NotAuto},
     }},
     {"Logistics", view = "overview", {
         {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
@@ -612,6 +619,7 @@ Groups[#Groups + 1] = {"Agi drivers", view = "stats", {
 
 local Columns = {}
 for gi, g in ipairs(Groups) do
+    State.collapsed[gi] = g.collapsed
     for _, col in ipairs(g[2]) do
         col.group = gi
         col.label = table.remove(col, 2)
@@ -683,7 +691,7 @@ local function ComputeRow(id, ctx)
         if col.prop and w[col.prop] == Firearm:GetDefaultPropertyValue(col.prop) then row.default[col[1]] = true end
         ::continue::
     end
-    if kept_scope then row.Id = row.Id .. "*" end
+    if kept_scope then row.Id, row.Name = row.Id .. "*", row.Name .. "*" end
     DoneObject(w)
     return row
 end
@@ -786,7 +794,12 @@ local CurveViews = {rounds = true, distance = true, stats = true}
 -- curve views hide the always-on groups but Gun
 local function GroupShown(gi)
     local g = Groups[gi]
-    return g.view == State.view or not g.view and (not CurveViews[State.view] or gi == 1)
+    if g.hide_in and g.hide_in[State.view] then return false end
+    return g.view == State.view or not g.view and (not CurveViews[State.view] or g.always)
+end
+
+local function ColShown(col)
+    return Shown(col) and not (col.hide_in and col.hide_in[State.view])
 end
 
 local function Render(dlg)
@@ -892,7 +905,7 @@ local function ExportCSV(dlg)
     local head = {}
     local cols = {}
     for _, col in ipairs(Columns) do
-        if Shown(col) and GroupShown(col.group) then cols[#cols + 1] = col end
+        if ColShown(col) and GroupShown(col.group) then cols[#cols + 1] = col end
     end
     for i, col in ipairs(cols) do head[i] = col[1] end
     out[1] = table.concat(head, ",")
@@ -942,7 +955,16 @@ ApplyView = function(dlg)
             if n % 2 == 0 then shade = RGBA(255, 255, 255, 12) end
         end
         local folded = State.collapsed[gi]
-        local width = folded and collapsed_w or blocks.width[gi]
+        local width = 0
+        for i, col in ipairs(Columns) do
+            if col.group == gi and Shown(col) then
+                local vis = ColShown(col) and not folded
+                dlg["idHead" .. i]:SetVisible(vis)
+                dlg["idCol" .. i]:SetVisible(vis)
+                width = width + (vis and col.width or 0)
+            end
+        end
+        if folded then width = collapsed_w end
         for _, win in ipairs{blocks.head[gi], blocks.body[gi]} do
             win:SetVisible(show)
             win:SetBackground(shade)
@@ -950,7 +972,6 @@ ApplyView = function(dlg)
             win:SetMaxWidth(width)
         end
         blocks.cols[gi]:SetVisible(not folded)
-        for _, col in ipairs(blocks.body[gi]) do col:SetVisible(not folded) end
         blocks.label[gi]:SetText(folded and g[1]:sub(1, 3) .. "+" or g.title and g.title() or g[1])
     end
 end
@@ -1042,7 +1063,7 @@ local function Build()
         State.no_scope = not State.no_scope
         Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
         MarkPending(dlg)
-    end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Id* = optic can't come off")})
+    end, {RolloverText = Untranslated("Removed: optics swapped for ironsights or an empty slot. Name* = optic can't come off")})
     Knob(scope_btn, State.no_scope and "Scopes: removed" or "Scopes: default", State.no_scope, KnobColors.scope)
     local bipod_btn
     bipod_btn = Button(bar, "", function()
@@ -1113,15 +1134,14 @@ local function Build()
         LayoutHSpacing = group_gap,
         MouseWheelStep = 80,
     }, list_box)
-    local head_groups, body_groups, head_blocks, widths, labels = {}, {}, {}, {}, {}
-    rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups, cols = head_groups, width = widths, label = labels})
+    local head_groups, body_groups, head_blocks, labels = {}, {}, {}, {}
+    rawset(dlg, "rat_blocks", {head = head_blocks, body = body_groups, cols = head_groups, label = labels})
     for gi, g in ipairs(Groups) do
         local width = 0
         for _, col in ipairs(g[2]) do width = width + (Shown(col) and col.width or 0) end
         -- head and body blocks share one width so a long group label can't shift the columns under it
         local hg = XWindow:new({LayoutMethod = "VList", MinWidth = width, MaxWidth = width, FoldWhenHidden = true}, head)
         head_blocks[gi] = hg
-        widths[gi] = width
         local label = XText:new({Translate = false, TextStyle = "SatelliteContextMenuText", HAlign = "center", Clip = "self", WordWrap = false,
                                  HandleMouse = gi > 1, RolloverText = gi > 1 and Untranslated(g[1] .. ": click to collapse / expand") or nil}, hg)
         labels[gi] = label
@@ -1152,6 +1172,7 @@ local function Build()
                 Padding = box(cell_pad, 2, cell_pad, 2),
                 LayoutMethod = "Box",
                 Background = RGBA(0, 0, 0, 0),
+                FoldWhenHidden = true,
                 RolloverText = Untranslated(col[3]),
             })
             btn.idLabel:SetHAlign(col.text and "left" or "right")
