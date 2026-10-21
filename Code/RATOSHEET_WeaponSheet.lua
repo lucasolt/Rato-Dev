@@ -216,22 +216,14 @@ end
 
 local AutoRounds = {3, 4, 5, 6, 8, 10, 15, 20}
 
--- best D/AP over single, burst and every Auto knob round count, at the sheet's distance: value, mode label, best auto
+-- best D/AP of the three fire-mode blocks (autofire at the Auto knob), at the sheet's distance: value, mode letter
 local function BestDAP(w, c)
-    if c.best == nil then
-        local best, mode = DAP(Stats(w, c, "single", 1, State.dist)), "S"
-        local b = DAP(Stats(w, c, "burst", 1, State.dist))
-        if b and (not best or b > best) then best, mode = b, "B" end
-        local auto_best, auto_n
-        for _, n in ipairs(AutoRounds) do
-            local m = Stats(w, c, "auto", n, State.dist)
-            local v = DAP(m)
-            if v and (not auto_best or v > auto_best) then auto_best, auto_n = v, m.shots end
-        end
-        if auto_best and (not best or auto_best > best) then best, mode = auto_best, "A" .. auto_n end
-        c.best = {best or false, best and mode or false, auto_best or false}
+    local best, mode
+    for _, m in ipairs{{"single", "S"}, {"burst", "B"}, {"auto", "A"}} do
+        local v = DAP(ModeStats(w, c, m[1]))
+        if v and (not best or v > best) then best, mode = v, m[2] end
     end
-    return c.best[1] or nil, c.best[2] or nil, c.best[3] or nil
+    return best, mode
 end
 
 local function Cents(v)
@@ -366,14 +358,14 @@ local Groups = {
         {"ADAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "auto") end, fmt = Cents},
     }},
     {"Best", view = "autofire", {
-        {"BestDAP", "D/AP", 5, "Best D/AP of the gun: single, burst or autofire at any of the Auto knob's round counts",
+        {"BestDAP", "D/AP", 5, "Best D/AP of the gun: single, burst or autofire at the Auto knob's rounds",
          function(w, c) return (BestDAP(w, c)) end, fmt = Cents},
-        {"BestMode", "Mode", 4, "Mode of the best D/AP: S single, B burst, A<n> autofire with n rounds",
+        {"BestMode", "Mode", 4, "Mode of the best D/AP: S single, B burst, A autofire",
          function(w, c) return select(2, BestDAP(w, c)) end, text = true},
-        {"AvS", "A/S", 4, "Best autofire D/AP / single D/AP: above 1 the gun is better on auto",
+        {"AvS", "A/S", 4, "Autofire D/AP / single D/AP: above 1 the gun is better on auto",
          function(w, c)
-             local auto = select(3, BestDAP(w, c))
-             local single = DAP(Stats(w, c, "single", 1, State.dist))
+             local auto = DmgPerAP(w, c, "auto")
+             local single = DmgPerAP(w, c, "single")
              return auto and single and single > 0 and MulDivRound(auto, 100, single) or nil
          end, fmt = Cents},
     }},
