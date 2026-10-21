@@ -466,7 +466,7 @@ Groups[#Groups + 1] = {"Stat leverage", view = "stats", title = function() retur
      function(w, c) return LevPct(w, c, "dex_lo", "dex_hi") end},
     {"LStr", "Str%", 5, "D/AP gained from Str 50 to 90 (recoil gate, held weight, MG/autofire hipfire, stance AP)." .. lev_note,
      function(w, c) return LevPct(w, c, "str_lo", "str_hi") end},
-    {"LAgi", "Agi%", 5, "D/AP gained from Agi 50 to 90: Reflexes only. The bigger AP pool is the same for every gun and left out." .. lev_note,
+    {"LAgi", "Agi%", 5, "D/AP gained from Agi 50 to 90 on stationary attacks: Reflexes only (see Mobile for moving fire). The bigger AP pool is the same for every gun and left out." .. lev_note,
      function(w, c) return LevPct(w, c, "agi_lo", "agi_hi") end},
     {"LLean", "Str-Dex", 7, "Str% minus Dex%: positive = a Strength gun, negative = a Dexterity gun",
      function(w, c)
@@ -535,7 +535,7 @@ Groups[#Groups + 1] = {"Dex drivers", view = "stats", {
 Groups[#Groups + 1] = {"Str drivers", view = "stats", {
     {"LvBP", "StrBP", 5, "Caliber Strength breakpoint: below it the recoil control falls off fast", function(w) return (Recoil_StrBreakpoint(w)) end},
     {"LvKick", "Kick", 4, "Single kick at Strength 100 (x100): the gun's own push", function(w) return Recoil(w) end, lower = true},
-    {"LvWgt", "Wgt", 4, "weigth_held_mul (pivot " .. tostring(const.Combat.Aperture.HeldPivot) .. ")", function(w) return w.weigth_held_mul end,
+    {"LvWgt", "Wgt", 4, "weigth_held_mul (pivot A.HeldPivot)", function(w) return w.weigth_held_mul end,
      lower = true, prop = "weigth_held_mul"},
     {"LvHeld", "Held", 4, "Held-weight share of the base shooter's cone: closes at a fixed Hand-Eye, only Strength lifts it",
      function(w, c) local g = LevGaps(w, c) return g and g.held end, lower = true},
@@ -543,6 +543,71 @@ Groups[#Groups + 1] = {"Str drivers", view = "stats", {
     {"LvH90", "Hld90", 5, "Held-weight cone malus % at Str 90, sheet stance", function(w, c) return LevHeldPen(w, c, 90) end, lower = true},
     {"LvCmb", "Cmb", 3, "Cumbersome: extra stance AP below Strength " .. const.Combat.CumbersomeStanceAP_StrThreshold,
      function(w) return w:IsCumbersome() and R_VanillaAPToDisplay(1) end, lower = true},
+}}
+
+-- mobile attacks: one aim-1 round of Mobile Shot (pistols) or Run and Gun (SMGs), standing, at the Dist knob; recoil left out
+local function MobileAction(w)
+    local list = w.AvailableAttacks or empty_table
+    return table.find(list, "MobileShot") and CombatActions.MobileShot or table.find(list, "RunAndGun") and CombatActions.RunAndGun or nil
+end
+
+local function MobileDmg(w, c, name)
+    c.mob = c.mob or {}
+    if c.mob[name] ~= nil then return c.mob[name] or nil end
+    c.mob[name] = false
+    local action = MobileAction(w)
+    if not action then return end
+    local stats = {}
+    for k, v in pairs(LevBase) do stats[k] = LevProfiles[name][k] or v end
+    local sh = Shooter(w, stats, "Standing")
+    local a = const.Combat.Aperture
+    local cth = Clamp(Rat_RayleighCTH(Theta(State.dist), Max(1, Rat_GetAperture(w, sh, action, 1))), a.MinCTH, a.MaxCTH)
+    local crit = CritChance(w, sh, action.id, 1)
+    c.mob[name] = MulDivRound(cth, (w.Damage or 0) * 100 + MulDivRound((w.Damage or 0) * crit, CritDamage(w), 100), 100)
+    return c.mob[name]
+end
+
+local function MobilePct(w, c, lo, hi)
+    local a, b = MobileDmg(w, c, lo), MobileDmg(w, c, hi)
+    return a and b and a > 0 and MulDivRound(b - a, 100, a) or nil
+end
+
+local function MobileStep(w, c)
+    local action = MobileAction(w)
+    if not action then return end
+    local _, _, parts = Rat_GetAperture(w, Shooter(w, LevBase, "Standing"), action, 1)
+    return parts and parts.step
+end
+
+-- display move AP of the mobile attack at Agi 50 / 90, priced on the selected merc
+local function MobileMoveAP(w, c)
+    local u, action = c.ap_unit, MobileAction(w)
+    if not u or not action then return end
+    local saved = u.Agility
+    local ap = {}
+    for i, agi in ipairs{50, 90} do
+        u.Agility = agi
+        local ok, v = pcall(rat_getMobileshot_moveAP, action, u, w)
+        ap[i] = ok and R_VanillaAPToDisplay(v) or "?"
+    end
+    u.Agility = saved
+    return ap[1] .. "/" .. ap[2]
+end
+
+local mob_note = " One aim-1 round of the mobile attack (Mobile Shot, else Run and Gun), standing, at the Dist knob; no recoil, no movement AP."
+Groups[#Groups + 1] = {"Mobile leverage", view = "stats", title = function() return "Mobile @ " .. State.dist .. " tiles" end, {
+    {"MAct", "Act", 3, "MS = Mobile Shot, RG = Run and Gun",
+     function(w) local a = MobileAction(w) return a and (a.id == "MobileShot" and "MS" or "RG") end, text = true},
+    {"MDmg", "Dmg", 5, "Base shooter's expected damage per mobile round." .. mob_note, function(w, c) return MobileDmg(w, c, "base") end, fmt = Cents},
+    {"MAgi", "Agi%", 5, "Mobile damage gained from Agi 50 to 90: the moving-Agility multiplier plus Reflexes." .. mob_note,
+     function(w, c) return MobilePct(w, c, "agi_lo", "agi_hi") end},
+    {"MDex", "Dex%", 5, "Mobile damage gained from Dex 50 to 90: Hand-Eye on the halved aim level plus Reflexes." .. mob_note,
+     function(w, c) return MobilePct(w, c, "dex_lo", "dex_hi") end},
+}}
+Groups[#Groups + 1] = {"Agi drivers", view = "stats", {
+    {"AgStep", "Step%", 5, "Snapshot step of the mobile attack at Agi 70 (base shooter). The moving-Agility multiplier on it "
+        .. "(MobileAgiPer10 per 10 points off 70) is the same for every gun", MobileStep, lower = true},
+    {"AgMv", "MvAP", 7, "Move AP of the mobile attack at Agi 50 / 90 (selected merc's perks and weapon stance)", MobileMoveAP, text = true},
 }}
 
 local Columns = {}
