@@ -291,9 +291,9 @@ local Groups = {
             return (burst or auto) and w.RPM
         end, prop = "RPM"},
         {"Wgt", "Wgt", 4, "weigth_held_mul: above RecoilHeldPivot, unsupported fire loses control (Strength relieves it)",
-         function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul"},
+         function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul", hide_in = NotAuto},
     }},
-    {"Drift", hide_in = NotAuto, {
+    {"Drift", {
         {"BDrift", "Burst", 4, "Selective burst: how far the muzzle walked by the last round (3rd at most), arcmin. "
             .. "Kick, RPM, weight, Strength, stance and bipod; no cone", function(w, c) return Drift(w, c, "burst") end, lower = true},
         {"ADrift", "Auto", 4, "3-round autofire: how far the muzzle walked by the 3rd round, arcmin",
