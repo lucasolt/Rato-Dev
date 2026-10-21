@@ -39,7 +39,7 @@ local function Shooter(weapon, owner, stance)
 end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
-               view = "overview", aim = 3, dist = 10, collapsed = {}}
+               view = "overview", aim = 3, dist = 10, auto = 3, collapsed = {}}
 
 local function Recoil(w, unit)
     local recoil = GetWepRecoil(w, unit, true) * GetCaliberStrRecoil(w, unit or FullStats)
@@ -119,8 +119,8 @@ local function ConeCTH(w, shooter, aim, tiles)
     return Clamp(Rat_RayleighCTH(Theta(tiles), Sigma(w, shooter, nil, aim)), a.MinCTH, a.MaxCTH)
 end
 
--- the attack each fire mode stands for; autofire at 3 rounds
-local function ModeAction(w, kind)
+-- the attack each fire mode stands for; autofire at auto_n rounds, capped by the magazine
+local function ModeAction(w, kind, auto_n)
     local burst, auto = BurstModes(w)
     if kind == "single" then
         return not w.AutoFireOnly and CombatActions.SingleShot, 1
@@ -128,12 +128,13 @@ local function ModeAction(w, kind)
         local action = burst and CombatActions.BurstFire
         return action, action and w:GetAutofireShots(action)
     end
-    return auto and Rat_AutoFireView(3, Rat_AutoAttackId(w)), 3
+    local n = Min(auto_n or State.auto, w.MagazineSize or auto_n or State.auto)
+    return auto and Rat_AutoFireView(n, Rat_AutoAttackId(w)), n
 end
 
 -- muzzle offset of the last round (3rd at most), arcmin; no cone, so it is the recoil walk alone
 local function Drift(w, c, kind)
-    local action, shots = ModeAction(w, kind)
+    local action, shots = ModeAction(w, kind, 3)
     shots = Min(3, shots or 0)
     local prof = action and shots > 1 and Rat_RecoilProfile(c.shooter, action, w, shots)
     if not prof then return end
@@ -312,7 +313,9 @@ local Groups = {
          function(w, c) return Field(w, c, "burst", "ap") end, lower = true},
         {"BDAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "burst") end, fmt = Cents},
     }},
-    {"Auto (3 rds)", view = "autofire", {
+    {"Auto", view = "autofire", title = function() return "Auto (" .. State.auto .. " rds)" end, {
+        {"ARds", "Rds", 3, "Rounds fired: the Auto knob, capped by the magazine", function(w, c) return Field(w, c, "auto", "shots") end,
+         text = true},
         {"AHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
          function(w, c) return Field(w, c, "auto", "sum") end, fmt = Hundredths},
         {"ACrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
@@ -628,6 +631,7 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
+local AutoRounds = {3, 4, 5, 6, 8, 10, 15, 20}
 local collapsed_w = 5 * char_w + 2 * cell_pad
 
 -- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
@@ -651,7 +655,7 @@ ApplyView = function(dlg)
         end
         blocks.cols[gi]:SetVisible(not folded)
         for _, col in ipairs(blocks.body[gi]) do col:SetVisible(not folded) end
-        blocks.label[gi]:SetText(folded and g[1]:sub(1, 3) .. "+" or g[1])
+        blocks.label[gi]:SetText(folded and g[1]:sub(1, 3) .. "+" or g.title and g.title() or g[1])
     end
 end
 
@@ -666,6 +670,7 @@ local KnobColors = {
     view = RGBA(50, 125, 70, 255),
     aim = RGBA(130, 55, 80, 255),
     dist = RGBA(90, 100, 50, 255),
+    auto = RGBA(140, 90, 40, 255),
 }
 
 local function Knob(btn, text, active, color)
@@ -756,8 +761,9 @@ local function Build()
     Button(bar, "Close", function() dlg:Close() end)
 
     local bar2 = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top", Margins = box(0, 6, 0, 0)}, dlg)
-    local view_btn, aim_btn, dist_btn
+    local view_btn, aim_btn, dist_btn, auto_btn
     local function knob_texts()
+        Knob(auto_btn, "Auto: " .. State.auto .. " rds", State.auto ~= 3, KnobColors.auto)
         Knob(view_btn, State.view == "autofire" and "View: Autofire" or "View: Overview", State.view == "autofire",
              KnobColors.view)
         Knob(aim_btn, "Aim: " .. State.aim, State.aim ~= 3, KnobColors.aim)
@@ -779,6 +785,13 @@ local function Build()
         knob_texts()
         RecomputeSoon(dlg)
     end, {RolloverText = Untranslated("Target distance of the Autofire view; the target is always standing")})
+    auto_btn = Button(bar2, "", function()
+        local i = table.find(AutoRounds, State.auto) or 0
+        State.auto = AutoRounds[i % #AutoRounds + 1]
+        knob_texts()
+        ApplyView(dlg)
+        RecomputeSoon(dlg)
+    end, {RolloverText = Untranslated("Rounds of the Autofire view's Auto block, capped by each gun's magazine")})
     knob_texts()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
         :SetTextColor(RGB(200, 180, 120))
