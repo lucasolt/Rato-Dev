@@ -2,7 +2,6 @@
 -- Getters mirror DESCRIPTION_HINTS_get.lua (locals there); keep them in step when the hints change.
 
 local sheet_id = "idRatoWeaponSheet"
-local csv_path = "AppData/RatoWeaponSheet.csv"
 local samples = 64
 local group_gap = 8
 local cell_style = "PDAIMPContentTextSmall"
@@ -909,8 +908,9 @@ local function ExportCSV(dlg)
         end
         out[#out + 1] = table.concat(cells, ",")
     end
-    local err = AsyncStringToFile(csv_path, table.concat(out, "\n"))
-    SetStatus(dlg, err and ("export failed: " .. tostring(err)) or ("exported " .. (#out - 1) .. " rows to " .. csv_path))
+    -- mods can't write files (AsyncStringToFile is in ModEnvBlacklist)
+    CopyToClipboard(table.concat(out, "\n"))
+    SetStatus(dlg, "copied " .. (#out - 1) .. " rows to the clipboard as CSV")
 end
 
 local function Button(parent, text, on_press, props)
@@ -1064,8 +1064,8 @@ local function Build()
     end, {RolloverText = Untranslated("Removed: every bipod slot emptied, fixed MG bipods included")})
     Knob(bipod_btn, State.no_bipod and "Bipods: removed" or "Bipods: default", State.no_bipod, KnobColors.bipod)
     Button(bar, "Recompute", function() Recompute(dlg) end, {Id = "idApply"})
-    Button(bar, "Export CSV", function() ExportCSV(dlg) end,
-        {RolloverText = Untranslated("Visible rows, current sort, to %AppData%/Jagged Alliance 3/RatoWeaponSheet.csv")})
+    Button(bar, "Copy CSV", function() ExportCSV(dlg) end,
+        {RolloverText = Untranslated("Visible rows and columns, current sort, to the clipboard as CSV")})
     Button(bar, "Close", function() dlg:Close() end)
 
     local bar2 = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 6, Dock = "top", Margins = box(0, 6, 0, 0)}, dlg)
