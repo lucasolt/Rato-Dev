@@ -248,9 +248,9 @@ local NotAuto = {autofire = true}
 
 local Groups = {
     {"Gun", always = true, {
-        {"Name", "Name", 10, "Display name; * = optic can't come off", function(w) return _InternalTranslate(w.DisplayName or "") end,
+        {"Name", "Name", 7, "Display name; * = optic can't come off", function(w) return _InternalTranslate(w.DisplayName or "") end,
          text = true},
-        {"Cls", "Class", 6, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
+        {"Cls", "Class", 5, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
         {"Cal", "Caliber", 8, "Caliber", function(w) return w.Caliber or "" end, text = true},
     }},
     {"Id", always = true, collapsed = true, {
@@ -291,7 +291,7 @@ local Groups = {
             return (burst or auto) and w.RPM
         end, prop = "RPM"},
         {"Wgt", "Wgt", 4, "weigth_held_mul: above RecoilHeldPivot, unsupported fire loses control (Strength relieves it)",
-         function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul", hide_in = NotAuto},
+         function(w) return w.weigth_held_mul end, lower = true, prop = "weigth_held_mul"},
     }},
     {"Drift", {
         {"BDrift", "Burst", 4, "Selective burst: how far the muzzle walked by the last round (3rd at most), arcmin. "
