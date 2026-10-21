@@ -162,17 +162,17 @@ local function CritDamage(w, unit)
     return bonus
 end
 
--- one fire mode at the sheet's aim: {shots, sum of round CTH, crit %, expected damage, AP}, cached per row
-local function Stats(w, c, kind, n, dist)
+-- one fire mode at the sheet's aim (or `aim`): {shots, sum of round CTH, crit %, expected damage, AP}, cached per row
+local function Stats(w, c, kind, n, dist, aim)
     if kind == "auto" then n = Min(n, w.MagazineSize or n) end
-    local key = kind .. (kind == "auto" and n or "") .. "@" .. dist
+    aim = Min(aim or State.aim, w.MaxAimActions or 3)
+    local key = kind .. (kind == "auto" and n or "") .. "@" .. dist .. "a" .. aim
     c.stats = c.stats or {}
     if c.stats[key] ~= nil then return c.stats[key] or nil end
     c.stats[key] = false
     local action, shots = ModeAction(w, kind, n)
     if not action then return end
     local a = const.Combat.Aperture
-    local aim = Min(State.aim, w.MaxAimActions or 3)
     local sum = 0
     if kind == "single" then
         sum = ConeCTH(w, c.shooter, aim, dist)
@@ -187,9 +187,12 @@ local function Stats(w, c, kind, n, dist)
     -- with aim, GetAPCost already adds the shooting stance and the aim levels
     local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
     ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
+    -- GetAPCost adds the cycle only to an unbolted gun; the leverage view charges it on every single shot
+    if ap and kind == "single" and c.cycle_ap then ap = ap + c.cycle_ap end
     local crit = CritChance(w, c.shooter, kind == "auto" and Rat_AutoAttackId(w) or action.id, aim)
     local per_hit = (w.Damage or 0) * 100 + MulDivRound((w.Damage or 0) * crit, CritDamage(w, c.unit), 100)
-    c.stats[key] = {shots = shots, sum = sum, crit = crit, dmg = MulDivRound(sum, per_hit, 100 * 100), ap = ap}
+    local dmg100 = MulDivRound(sum, per_hit, 100)
+    c.stats[key] = {shots = shots, sum = sum, crit = crit, dmg = MulDivRound(dmg100, 1, 100), dmg100 = dmg100, ap = ap}
     return c.stats[key]
 end
 
@@ -202,9 +205,9 @@ local function Field(w, c, kind, key)
     return m and m[key]
 end
 
--- damage per AP in hundredths
+-- damage per AP in hundredths, off the unrounded damage so small stat swings still register
 local function DAP(m)
-    return m and m.ap and MulDivRound(m.dmg * 100, 1, m.ap)
+    return m and m.ap and MulDivRound(m.dmg100, 1, m.ap)
 end
 
 local function DmgPerAP(w, c, kind)
@@ -397,6 +400,90 @@ for _, mode in ipairs{{"single", "S", "Single D/AP by distance"}, {"burst", "B",
         title = kind == "auto" and function() return "Auto D/AP by distance (" .. State.auto .. " rds)" end or nil}
 end
 
+-- stat leverage view: one stat swung 50 -> 90 off a 70 base (Marks 80); AP priced on the selected merc with its stats overridden
+local LevBase = {Marksmanship = 80, Dexterity = 70, Agility = 70, Strength = 70, Wisdom = 70, Explosives = 70}
+local LevProfiles = {
+    base = {}, dex_lo = {Dexterity = 50}, dex_hi = {Dexterity = 90}, str_lo = {Strength = 50}, str_hi = {Strength = 90},
+    agi_lo = {Agility = 50}, agi_hi = {Agility = 90}, weak = {Strength = 50, Dexterity = 90}, strong = {Strength = 90, Dexterity = 50},
+}
+local LevStatKeys = {"Marksmanship", "Dexterity", "Agility", "Strength"}
+
+-- best D/AP over aim 0..max and every fire mode at the Dist knob: value, mode letter + aim
+local function BestTurnDAP(w, c)
+    local best, mode
+    for aim = 0, w.MaxAimActions or 3 do
+        for _, kind in ipairs{"single", "burst", "auto"} do
+            local v = DAP(Stats(w, c, kind, State.auto, State.dist, aim))
+            if v and (not best or v > best) then
+                best, mode = v, (kind == "single" and "S" or kind == "burst" and "B" or "A") .. aim
+            end
+        end
+    end
+    return best, mode
+end
+
+local function Leverage(w, c)
+    if c.lev ~= nil then return c.lev or nil end
+    c.lev = false
+    local u = c.ap_unit
+    if not u then return end
+    local saved = {}
+    for _, k in ipairs(LevStatKeys) do saved[k] = u[k] end
+    local out = {}
+    local ok, err = pcall(function()
+        for name, over in pairs(LevProfiles) do
+            local stats = {}
+            for k, v in pairs(LevBase) do stats[k] = over[k] or v end
+            for _, k in ipairs(LevStatKeys) do u[k] = stats[k] end
+            local pc = {ap_unit = u, shooter = Shooter(w, stats, c.shooter.stance),
+                        cycle_ap = rat_canBolt(w) and MulDivRound(rat_get_manual_cyclingAP(u, w, true), 1, const.Scale.AP) or nil}
+            out[name] = {BestTurnDAP(w, pc)}
+        end
+    end)
+    for k, v in pairs(saved) do u[k] = v end
+    if not ok then error(err) end
+    c.lev = out
+    return out
+end
+
+local function LevValue(w, c, name)
+    local lev = Leverage(w, c)
+    return lev and lev[name][1]
+end
+
+-- % D/AP gained from the low to the high profile
+local function LevPct(w, c, lo, hi)
+    local a, b = LevValue(w, c, lo), LevValue(w, c, hi)
+    return a and b and a > 0 and MulDivRound(b - a, 100, a) or nil
+end
+
+local lev_note = " Best D/AP over aim 0-max and single/burst/auto (Auto knob rounds) at the Dist knob; bolt guns pay the cycle on every shot."
+Groups[#Groups + 1] = {"Stat leverage", view = "stats", title = function() return "Stat leverage @ " .. State.dist .. " tiles" end, {
+    {"LBase", "D/AP", 5, "Base shooter: Marks 80, Dex/Str/Agi 70." .. lev_note, function(w, c) return LevValue(w, c, "base") end, fmt = Cents},
+    {"LMode", "Mode", 4, "Base shooter's best mode: S single, B burst, A auto, then the aim level",
+     function(w, c) local lev = Leverage(w, c) return lev and lev.base[2] end, text = true},
+    {"LDex", "Dex%", 5, "D/AP gained from Dex 50 to 90 (Hand-Eye aim and crit, Reflexes on the snapshot step, cycling AP)." .. lev_note,
+     function(w, c) return LevPct(w, c, "dex_lo", "dex_hi") end},
+    {"LStr", "Str%", 5, "D/AP gained from Str 50 to 90 (recoil gate, held weight, MG/autofire hipfire, stance AP)." .. lev_note,
+     function(w, c) return LevPct(w, c, "str_lo", "str_hi") end},
+    {"LAgi", "Agi%", 5, "D/AP gained from Agi 50 to 90: Reflexes only. The bigger AP pool is the same for every gun and left out." .. lev_note,
+     function(w, c) return LevPct(w, c, "agi_lo", "agi_hi") end},
+    {"LLean", "Str-Dex", 7, "Str% minus Dex%: positive = a Strength gun, negative = a Dexterity gun",
+     function(w, c)
+         local s, d = LevPct(w, c, "str_lo", "str_hi"), LevPct(w, c, "dex_lo", "dex_hi")
+         return s and d and s - d
+     end},
+}}
+Groups[#Groups + 1] = {"Archetypes", view = "stats", {
+    {"LWeak", "Weak", 5, "STR 50 / DEX 90 (Marks 80, Agi 70)." .. lev_note, function(w, c) return LevValue(w, c, "weak") end, fmt = Cents},
+    {"LStrong", "Strong", 6, "STR 90 / DEX 50 (Marks 80, Agi 70)." .. lev_note, function(w, c) return LevValue(w, c, "strong") end, fmt = Cents},
+    {"LWS", "W/S%", 5, "Weak D/AP as % of strong: above 100 the gun favours the dexterous merc",
+     function(w, c)
+         local a, b = LevValue(w, c, "weak"), LevValue(w, c, "strong")
+         return a and b and b > 0 and MulDivRound(a, 100, b) or nil
+     end},
+}}
+
 local Columns = {}
 for gi, g in ipairs(Groups) do
     for _, col in ipairs(g[2]) do
@@ -568,7 +655,7 @@ local function Shown(col)
     return not col.shown or col.shown()
 end
 
-local CurveViews = {rounds = true, distance = true}
+local CurveViews = {rounds = true, distance = true, stats = true}
 
 -- curve views hide the always-on groups but Gun
 local function GroupShown(gi)
@@ -641,7 +728,7 @@ local function Recompute(dlg)
         for i, id in ipairs(ids) do
             if dlg.window_state == "destroying" then return end
             rows[#rows + 1] = ComputeRow(id, ctx)
-            if i % 4 == 0 then
+            if i % (ctx.view == "stats" and 1 or 4) == 0 then
                 SetStatus(dlg, string.format("computing %d / %d ...", i, #ids))
                 Sleep(1)
             end
@@ -712,8 +799,9 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
-local Views = {"overview", "autofire", "rounds", "distance"}
-local ViewNames = {overview = "Overview", autofire = "Autofire", rounds = "D/AP by rounds", distance = "D/AP by distance"}
+local Views = {"overview", "autofire", "rounds", "distance", "stats"}
+local ViewNames = {overview = "Overview", autofire = "Autofire", rounds = "D/AP by rounds", distance = "D/AP by distance",
+                   stats = "Stat leverage"}
 local collapsed_w = 5 * char_w + 2 * cell_pad
 
 -- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
@@ -856,7 +944,7 @@ local function Build()
         knob_texts()
         ApplyView(dlg)
         if State.rows and State.rows_view ~= State.view then MarkPending(dlg) end
-    end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP. D/AP by rounds (at Dist) and by distance (at Auto rounds)")})
+    end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP. D/AP by rounds (at Dist) and by distance (at Auto rounds). Stat leverage: how much Dex, Str and Agi move each gun (needs a selected merc)")})
     aim_btn = Button(bar2, "", function()
         State.aim = (State.aim + 1) % 4
         knob_texts()
