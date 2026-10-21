@@ -257,13 +257,12 @@ local Groups = {
         {"Id", "Id", 14, "Preset id", function(w) return w.class end, text = true},
     }},
     {"Damage", {
-        {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end},
+        {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end, hide_in = NotAuto},
         {"Crit", "Crit", 4, "CritChance, Basic ammo loaded", function(w) return w.CritChance end, prop = "CritChance"},
         {"CPA", "C/Aim", 4, "Crit chance per aim level (Rat_WeaponCritPerAim x Hand-Eye)",
          function(w, c) return MulDivRound(Rat_WeaponCritPerAim(w), c.unit and rGetHandEyeCoordination(c.unit) or 100, 100) end,
          fmt = Hundredths, prop = "CritPerAim", hide_in = NotAuto},
-        {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end,
-         hide_in = NotAuto},
+        {"Pen", "Pen", 4, "Penetration class, Basic ammo loaded", function(w) return Clamp(w.PenetrationClass, 1, #PenetrationClassIds) end},
     }},
     {"Accuracy", {
         {"Aim", "Aim", 5, "aCTH aim accuracy per level, components applied", function(w, c) return Aim(w, c.unit) end,
@@ -312,7 +311,7 @@ local Groups = {
         {"AimRec", "+Aim", 4, "After one single shot, every aim level of the next attack costs this much more AP "
             .. "(Rat_recoil stack 1, Rat_GetRecoilAimCost)", function(w, c)
             return cRound(Rat_GetRecoilAimCost(c.unit or c.shooter, CombatActions.SingleShot, w, 1))
-        end, lower = true, hide_in = NotAuto},
+        end, lower = true},
     }},
     {"Logistics", view = "overview", {
         {"Mag", "Mag", 4, "MagazineSize", function(w) return w.MagazineSize end},
