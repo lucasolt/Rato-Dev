@@ -368,55 +368,34 @@ local Groups = {
              return auto and single and single > 0 and MulDivRound(auto, 100, single) or nil
          end, fmt = Cents},
     }},
-    {"Rounds", view = "curves", title = function() return "D/AP by rounds @ " .. State.dist .. " tiles" end, {
-        {"CRS", "Sgl", 4, "Single shot", function(w, c) return DAP(Stats(w, c, "single", 1, State.dist)) end, fmt = Cents},
-        {"CRB", "Bst", 4, "Selective burst", function(w, c) return DAP(Stats(w, c, "burst", 1, State.dist)) end, fmt = Cents},
-        {"CR3", "3", 4, "Autofire, 3 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 3 and DAP(Stats(w, c, "auto", 3, State.dist)) or nil end, fmt = Cents},
-        {"CR4", "4", 4, "Autofire, 4 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 4 and DAP(Stats(w, c, "auto", 4, State.dist)) or nil end, fmt = Cents},
-        {"CR5", "5", 4, "Autofire, 5 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 5 and DAP(Stats(w, c, "auto", 5, State.dist)) or nil end, fmt = Cents},
-        {"CR6", "6", 4, "Autofire, 6 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 6 and DAP(Stats(w, c, "auto", 6, State.dist)) or nil end, fmt = Cents},
-        {"CR8", "8", 4, "Autofire, 8 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 8 and DAP(Stats(w, c, "auto", 8, State.dist)) or nil end, fmt = Cents},
-        {"CR10", "10", 4, "Autofire, 10 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 10 and DAP(Stats(w, c, "auto", 10, State.dist)) or nil end, fmt = Cents},
-        {"CR15", "15", 4, "Autofire, 15 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 15 and DAP(Stats(w, c, "auto", 15, State.dist)) or nil end, fmt = Cents},
-        {"CR20", "20", 4, "Autofire, 20 rounds; blank past the magazine",
-         function(w, c) return (w.MagazineSize or 0) >= 20 and DAP(Stats(w, c, "auto", 20, State.dist)) or nil end, fmt = Cents},
-    }},
-    {"SDist", view = "curves", title = function() return "Single D/AP by distance" end, {
-        {"CDS5", "5t", 4, "Single shot at 5 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 5)) end, fmt = Cents},
-        {"CDS10", "10t", 4, "Single shot at 10 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 10)) end, fmt = Cents},
-        {"CDS15", "15t", 4, "Single shot at 15 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 15)) end, fmt = Cents},
-        {"CDS20", "20t", 4, "Single shot at 20 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 20)) end, fmt = Cents},
-        {"CDS30", "30t", 4, "Single shot at 30 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 30)) end, fmt = Cents},
-        {"CDS40", "40t", 4, "Single shot at 40 tiles",
-         function(w, c) return DAP(Stats(w, c, "single", 1, 40)) end, fmt = Cents},
-    }},
-    {"ADist", view = "curves", title = function() return "Auto D/AP by distance (" .. State.auto .. " rds)" end, {
-        {"CDA5", "5t", 4, "Autofire at the Auto knob's rounds, 5 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 5)) end, fmt = Cents},
-        {"CDA10", "10t", 4, "Autofire at the Auto knob's rounds, 10 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 10)) end, fmt = Cents},
-        {"CDA15", "15t", 4, "Autofire at the Auto knob's rounds, 15 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 15)) end, fmt = Cents},
-        {"CDA20", "20t", 4, "Autofire at the Auto knob's rounds, 20 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 20)) end, fmt = Cents},
-        {"CDA30", "30t", 4, "Autofire at the Auto knob's rounds, 30 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 30)) end, fmt = Cents},
-        {"CDA40", "40t", 4, "Autofire at the Auto knob's rounds, 40 tiles",
-         function(w, c) return DAP(Stats(w, c, "auto", State.auto, 40)) end, fmt = Cents},
-    }},
 }
+
+-- curve views: D/AP by rounds at the Dist knob, and by distance at the Auto knob's rounds
+local curve_w = 6
+local by_rounds = {
+    {"CRS", "Sgl", curve_w, "Single shot", function(w, c) return DAP(Stats(w, c, "single", 1, State.dist)) end, fmt = Cents},
+    {"CRB", "Bst", curve_w, "Selective burst", function(w, c) return DAP(Stats(w, c, "burst", 1, State.dist)) end, fmt = Cents},
+}
+local auto_rounds = {}
+for _, n in ipairs(AutoRounds) do
+    auto_rounds[#auto_rounds + 1] = {"CR" .. n, tostring(n), curve_w, "Autofire, " .. n .. " rounds; blank past the magazine",
+        function(w, c) return (w.MagazineSize or 0) >= n and DAP(Stats(w, c, "auto", n, State.dist)) or nil end, fmt = Cents}
+end
+Groups[#Groups + 1] = {"Rounds", view = "rounds", title = function() return "Single / burst @ " .. State.dist .. " tiles" end, by_rounds}
+Groups[#Groups + 1] = {"AutoRounds", view = "rounds", title = function() return "Autofire D/AP by rounds @ " .. State.dist .. " tiles" end,
+                       auto_rounds}
+
+local CurveDistances = {5, 10, 15, 20, 30, 40}
+for _, mode in ipairs{{"single", "S", "Single D/AP by distance"}, {"burst", "B", "Burst D/AP by distance"}, {"auto", "A", "Auto"}} do
+    local kind, key, name = mode[1], mode[2], mode[3]
+    local cols = {}
+    for _, d in ipairs(CurveDistances) do
+        cols[#cols + 1] = {"CD" .. key .. d, d .. "t", curve_w, kind .. " at " .. d .. " tiles",
+            function(w, c) return DAP(Stats(w, c, kind, State.auto, d)) end, fmt = Cents}
+    end
+    Groups[#Groups + 1] = {name, view = "distance", cols,
+        title = kind == "auto" and function() return "Auto D/AP by distance (" .. State.auto .. " rds)" end or nil}
+end
 
 local Columns = {}
 for gi, g in ipairs(Groups) do
@@ -589,10 +568,12 @@ local function Shown(col)
     return not col.shown or col.shown()
 end
 
--- the curves view hides the always-on groups but Gun
+local CurveViews = {rounds = true, distance = true}
+
+-- curve views hide the always-on groups but Gun
 local function GroupShown(gi)
     local g = Groups[gi]
-    return g.view == State.view or not g.view and (State.view ~= "curves" or gi == 1)
+    return g.view == State.view or not g.view and (not CurveViews[State.view] or gi == 1)
 end
 
 local function Render(dlg)
@@ -730,8 +711,8 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
-local Views = {"overview", "autofire", "curves"}
-local ViewNames = {overview = "Overview", autofire = "Autofire", curves = "Curves"}
+local Views = {"overview", "autofire", "rounds", "distance"}
+local ViewNames = {overview = "Overview", autofire = "Autofire", rounds = "D/AP by rounds", distance = "D/AP by distance"}
 local collapsed_w = 5 * char_w + 2 * cell_pad
 
 -- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
@@ -874,7 +855,7 @@ local function Build()
         knob_texts()
         ApplyView(dlg)
         if State.rows and State.rows_view ~= State.view then RecomputeSoon(dlg) end
-    end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP. Curves: D/AP by rounds and by distance")})
+    end, {RolloverText = Untranslated("Overview: logistics and hit chance. Autofire: expected hits, damage and damage per AP. D/AP by rounds (at Dist) and by distance (at Auto rounds)")})
     aim_btn = Button(bar2, "", function()
         State.aim = (State.aim + 1) % 4
         knob_texts()
@@ -886,14 +867,14 @@ local function Build()
         knob_texts()
         ApplyView(dlg)
         RecomputeSoon(dlg)
-    end, {RolloverText = Untranslated("Target distance of the Autofire view and the curves by rounds; the target is always standing")})
+    end, {RolloverText = Untranslated("Target distance of the Autofire view and of D/AP by rounds; the target is always standing")})
     auto_btn = Button(bar2, "", function()
         local i = table.find(AutoRounds, State.auto) or 0
         State.auto = AutoRounds[i % #AutoRounds + 1]
         knob_texts()
         ApplyView(dlg)
         RecomputeSoon(dlg)
-    end, {RolloverText = Untranslated("Rounds of the Autofire view's Auto block, capped by each gun's magazine")})
+    end, {RolloverText = Untranslated("Rounds of the Autofire view's Auto block and of D/AP by distance, capped by each gun's magazine")})
     knob_texts()
     XText:new({Id = "idStatus", Translate = false, TextStyle = "SatelliteContextMenuText", VAlign = "center"}, bar2)
         :SetTextColor(RGB(200, 180, 120))
