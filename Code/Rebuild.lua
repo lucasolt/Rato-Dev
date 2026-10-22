@@ -12,4 +12,5 @@ end
 
 
 
-OnMsg.DataLoaded = not FirstLoad and rebuild()	
+-- rebuild on hot-reload only; registering the `and` expression handed Msg a boolean on first load
+if not FirstLoad then rebuild() end	
