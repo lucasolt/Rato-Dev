@@ -195,8 +195,10 @@ local function Stats(w, c, kind, n, dist, aim)
     else
         local prof = Rat_RecoilProfile(c.shooter, action, w, shots)
         if not prof then return end
-        local est = Rat_EstimateBurst(prof, Theta(dist), Sigma(w, c.shooter, action, aim), shots, samples, nil, nil, nil,
-                                      aim > 1 and Sigma(w, c.shooter, action, 1) or nil)
+        local sigma = Sigma(w, c.shooter, action, aim)
+        local follow = Rat_FollowUpConeMul(w, c.shooter, action, aim, false, nil, shots)
+        local est = Rat_EstimateBurst(prof, Theta(dist), sigma, shots, samples, nil, nil, nil,
+                                      follow and Max(1, MulDivRound(sigma, follow, 1000)))
         for i = 1, shots do
             sum = sum + Clamp(est.cth[i] or 0, a.MinCTH, a.MaxCTH)
         end
