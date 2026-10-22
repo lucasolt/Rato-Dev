@@ -203,13 +203,15 @@ local function Stats(w, c, kind, n, dist, aim)
     -- GetAPCost adds the aim levels; out of combat it prices the shooting stance at 0, so the Stance AP knob adds it
     local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
     ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
-    if ap and aim > 0 and State.stance_ap then ap = ap + StanceEntryAP(w, c) end
     -- GetAPCost adds the cycle only to an unbolted gun; the leverage view charges it on every single shot
     if ap and kind == "single" and c.cycle_ap then ap = ap + c.cycle_ap end
+    local ap_free, ap_paid = ap, ap and aim > 0 and ap + StanceEntryAP(w, c) or ap
+    if State.stance_ap then ap = ap_paid end
     local crit = CritChance(w, c.shooter, kind == "auto" and Rat_AutoAttackId(w) or action.id, aim)
     local per_hit = (w.Damage or 0) * 100 + MulDivRound((w.Damage or 0) * crit, CritDamage(w, c.unit), 100)
     local dmg100 = MulDivRound(sum, per_hit, 100)
-    c.stats[key] = {shots = shots, sum = sum, crit = crit, dmg = MulDivRound(dmg100, 1, 100), dmg100 = dmg100, ap = ap}
+    c.stats[key] = {shots = shots, sum = sum, crit = crit, dmg = MulDivRound(dmg100, 1, 100), dmg100 = dmg100, ap = ap,
+                    ap_free = ap_free, ap_paid = ap_paid}
     return c.stats[key]
 end
 
@@ -222,9 +224,10 @@ local function Field(w, c, kind, key)
     return m and m[key]
 end
 
--- damage per AP in hundredths, off the unrounded damage so small stat swings still register
-local function DAP(m)
-    return m and m.ap and MulDivRound(m.dmg100, 1, m.ap)
+-- damage per AP in hundredths, off the unrounded damage so small stat swings still register; `field` picks the AP
+local function DAP(m, field)
+    local ap = m and m[field or "ap"]
+    return ap and MulDivRound(m.dmg100, 1, ap)
 end
 
 local function DmgPerAP(w, c, kind)
@@ -234,10 +237,10 @@ end
 local AutoRounds = {3, 4, 5, 6, 8, 10, 15, 20}
 
 -- best D/AP of the three fire-mode blocks (autofire at the Auto knob), at the sheet's distance: value, mode letter
-local function BestDAP(w, c)
+local function BestDAP(w, c, field)
     local best, mode
     for _, m in ipairs{{"single", "S"}, {"burst", "B"}, {"auto", "A"}} do
-        local v = DAP(ModeStats(w, c, m[1]))
+        local v = DAP(ModeStats(w, c, m[1]), field)
         if v and (not best or v > best) then best, mode = v, m[2] end
     end
     return best, mode
@@ -261,9 +264,6 @@ local Groups = {
          text = true},
         {"Cls", "Class", 5, "Class", function(w) return ClassShort[WeaponClass(w)] or "?" end, text = true},
         {"Cal", "Caliber", 8, "Caliber", function(w) return w.Caliber or "" end, text = true},
-    }},
-    {"Id", always = true, collapsed = true, {
-        {"Id", "Id", 14, "Preset id", function(w) return w.class end, text = true},
     }},
     {"Damage", {
         {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end, hide_in = NotAuto},
@@ -375,10 +375,14 @@ local Groups = {
         {"ADAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "auto") end, fmt = Cents},
     }},
     {"Best", view = "autofire", {
-        {"BestDAP", "D/AP", 5, "Best D/AP of the gun: single, burst or autofire at the Auto knob's rounds",
-         function(w, c) return (BestDAP(w, c)) end, fmt = Cents},
-        {"BestMode", "Mode", 4, "Mode of the best D/AP: S single, B burst, A autofire",
-         function(w, c) return select(2, BestDAP(w, c)) end, text = true},
+        {"BestDAP", "Stnc", 5, "Best D/AP of the gun (single, burst or autofire at the Auto knob's rounds), paying the shooting stance on aimed attacks",
+         function(w, c) return (BestDAP(w, c, "ap_paid")) end, fmt = Cents},
+        {"BestMode", "M", 2, "Mode of the stance-paid best D/AP: S single, B burst, A autofire",
+         function(w, c) return select(2, BestDAP(w, c, "ap_paid")) end, text = true},
+        {"BestFree", "Free", 5, "Best D/AP with the shooting stance free (already in stance)",
+         function(w, c) return (BestDAP(w, c, "ap_free")) end, fmt = Cents},
+        {"BestFreeMode", "M", 2, "Mode of the stance-free best D/AP",
+         function(w, c) return select(2, BestDAP(w, c, "ap_free")) end, text = true},
         {"AvS", "A/S", 4, "Autofire D/AP / single D/AP: above 1 the gun is better on auto",
          function(w, c)
              local auto = DmgPerAP(w, c, "auto")
@@ -727,7 +731,8 @@ local function ComputeRow(id, ctx)
         w:AddModifier("ammo", mod.target_prop, mod.mod_mul, mod.mod_add)
     end
     local c = {unit = ctx.unit, ap_unit = ctx.ap_unit, shooter = Shooter(w, ctx.unit, ctx.stance)}
-    local row = {cls_order = table.find(ClassOrder, WeaponClass(w)) or 99, default = {}}
+    -- Id isn't a column; rows keep it for sort ties, the filter and the error log
+    local row = {Id = id, cls_order = table.find(ClassOrder, WeaponClass(w)) or 99, default = {}}
     for _, col in ipairs(Columns) do
         local gview = Groups[col.group].view
         if gview and gview ~= ctx.view then goto continue end
@@ -737,7 +742,7 @@ local function ComputeRow(id, ctx)
         if col.prop and w[col.prop] == Firearm:GetDefaultPropertyValue(col.prop) then row.default[col[1]] = true end
         ::continue::
     end
-    if kept_scope then row.Id, row.Name = row.Id .. "*", row.Name .. "*" end
+    if kept_scope then row.Name = row.Name .. "*" end
     DoneObject(w)
     return row
 end
