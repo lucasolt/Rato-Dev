@@ -734,6 +734,30 @@ end
 local function Permille(v)
     return (v < 0 and "-" or "") .. abs(v) / 10 .. "." .. abs(v) % 10
 end
+local Tenths = Permille
+
+-- below this the gain is estimator noise or a capped chance (per-mille); a rate needs a firmer Handling gain
+local SensRankMin = 5
+local SensRateMin = 10
+
+local function SensRank(w, c, field)
+    local list = {}
+    for _, lever in ipairs(SensLevers) do
+        local d = SensDelta(w, c, lever[1], field)
+        if d and d >= SensRankMin then list[#list + 1] = {lever[1], d} end
+    end
+    table.sort(list, function(a, b) return a[2] > b[2] end)
+    local s = ""
+    for _, e in ipairs(list) do s = s .. e[1] end
+    return s ~= "" and s or nil
+end
+
+-- Handling points worth one step of lever `key`, in tenths: +5 Handling buys `gh`, the lever `gx`
+local function SensRate(w, c, key, field)
+    local gh, gx = SensDelta(w, c, "H", field), SensDelta(w, c, key, field)
+    if not gh or not gx or gh < SensRateMin then return end
+    return MulDivRound(Max(0, gx), 50, gh)
+end
 
 local sens_note = " % change of D/AP when only this lever moves; AP priced on the selected merc. Hit chances are whole %, "
     .. "so a low-chance cell moves in steps; 0 at short range usually means the chance is already capped."
@@ -756,6 +780,15 @@ for _, blk in ipairs{
     for _, lever in ipairs(SensLevers) do
         cols[#cols + 1] = {"S" .. lever[1] .. kind, lever[2], 6, lever[3] .. "." .. note .. sens_note,
                            function(w, c) return SensDelta(w, c, lever[1], field) end, fmt = Permille}
+    end
+    cols[#cols + 1] = {"SRank" .. kind, "Rank", 4, "Levers by D/AP gain, best first (H Handling, A Aim, R Range, K kick); "
+        .. "gains under " .. Permille(SensRankMin) .. "% left out." .. note, function(w, c) return SensRank(w, c, field) end, text = true}
+    for i = 2, #SensLevers do
+        local lever = SensLevers[i]
+        cols[#cols + 1] = {"SX" .. lever[1] .. kind, lever[1] .. "=H", 4, "Handling points that buy what " .. lever[2]
+            .. " buys: above 5 the lever beats +5 Handling. Blank when +5 Handling gains under " .. Permille(SensRateMin)
+            .. "% (capped, or a negative Handling that only sheds bulk)." .. note,
+            function(w, c) return SensRate(w, c, lever[1], field) end, fmt = Tenths}
     end
     Groups[#Groups + 1] = {"Sens" .. name, view = "sens", title = title, cols}
 end
