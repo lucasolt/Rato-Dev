@@ -68,6 +68,8 @@ local function HipSnap(w, aim, unit, shooter)
     if aim > 0 and Rat_BipodUnbraced(shooter, w) then
         mul = cRound(mul * const.Combat.Snapshot.Components.BipodUnbracedMul)
     end
+    -- bulk (negative Handling) under BasePrecisionModel
+    mul = MulDivRound(mul, Rat_HandlingBulkStepMul(w, unit), 1000)
     return unit and MulDivRound(mul, Rat_StepAttrMul(unit, nil, aim), 100) or mul
 end
 
