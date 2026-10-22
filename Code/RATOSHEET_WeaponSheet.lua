@@ -672,6 +672,94 @@ Groups[#Groups + 1] = {"Agi drivers", view = "stats", {
     {"AgMv", "MvAP", 7, "Move AP of the mobile attack at Agi 50 / 90 (selected merc's perks and weapon stance)", MobileMoveAP, text = true},
 }}
 
+-- sensitivity view: one gun lever nudged at a time on the row's instance, D/AP change in per-mille
+local SensLevers = {
+    {"H", "+5H", "+5 Handling (a negative Handling only loses bulk, on the hip/snap step)",
+     function(w) w.Handling = (w.Handling or 0) + 5 end},
+    {"A", "+5Aim", "+5 AimAccuracy", function(w) w.AimAccuracy = (w.AimAccuracy or 0) + 5 end},
+    {"R", "+5Rng", "+5 WeaponRange (the cone floor)", function(w) w.WeaponRange = (w.WeaponRange or 0) + 5 end},
+    {"K", "-10Kck", "-10% gun recoil (wep_base_recoil_mul)",
+     function(w) w.wep_base_recoil_mul = MulDivRound(w.wep_base_recoil_mul or 100, 90, 100) end},
+}
+local SensProps = {"Handling", "AimAccuracy", "WeaponRange", "wep_base_recoil_mul"}
+
+-- D/AP x1000 unrounded: the cents D/AP stepped the deltas in 6% jumps on small values
+local function FineDAP(m, field)
+    local ap = m and m[field or "ap"]
+    return ap and MulDivRound(m.dmg100, 1000, ap)
+end
+
+local function FineBest(w, c)
+    local best, mode
+    for aim = 0, w.MaxAimActions or 3 do
+        for _, kind in ipairs{"single", "burst", "auto"} do
+            local v = FineDAP(Stats(w, c, kind, State.auto, State.dist, aim))
+            if v and (not best or v > best) then
+                best, mode = v, (kind == "single" and "S" or kind == "burst" and "B" or "A") .. aim
+            end
+        end
+    end
+    return best, mode
+end
+
+-- {lever key = {best D/AP, best mode, auto D/AP, single D/AP}}, D/AP x1000; "base" is the gun as is
+local function Sensitivity(w, c)
+    if c.sens ~= nil then return c.sens or nil end
+    c.sens = false
+    local saved = {}
+    for _, k in ipairs(SensProps) do saved[k] = rawget(w, k) end
+    local out = {}
+    local ok, err = pcall(function()
+        for i = 0, #SensLevers do
+            for _, k in ipairs(SensProps) do w[k] = saved[k] end
+            if i > 0 then SensLevers[i][4](w) end
+            local pc = {unit = c.unit, ap_unit = c.ap_unit, shooter = c.shooter}
+            local best, mode = FineBest(w, pc)
+            out[i > 0 and SensLevers[i][1] or "base"] = {best, mode, FineDAP(Stats(w, pc, "auto", State.auto, State.dist)),
+                                                       FineDAP(Stats(w, pc, "single", 1, State.dist))}
+        end
+    end)
+    for _, k in ipairs(SensProps) do w[k] = saved[k] end
+    if not ok then error(err) end
+    c.sens = out
+    return out
+end
+
+local function SensDelta(w, c, key, field)
+    local s = Sensitivity(w, c)
+    local a, b = s and s.base[field], s and s[key][field]
+    return a and b and a > 0 and MulDivRound(b - a, 1000, a) or nil
+end
+
+local function Permille(v)
+    return (v < 0 and "-" or "") .. abs(v) / 10 .. "." .. abs(v) % 10
+end
+
+local sens_note = " % change of D/AP when only this lever moves; AP priced on the selected merc. Hit chances are whole %, "
+    .. "so a low-chance cell moves in steps; 0 at short range usually means the chance is already capped."
+for _, blk in ipairs{
+    {"best", 1, "Best", function() return "Best D/AP @ " .. State.dist .. " tiles: lever gain %" end,
+     " Best over aim 0-max and single/burst/auto (Auto knob rounds) at the Dist knob."},
+    {"auto", 3, "Auto", function() return "Auto " .. State.auto .. " rds, aim " .. State.aim .. " @ " .. State.dist .. "t: gain %" end,
+     " Autofire at the Auto, Aim and Dist knobs."},
+    {"single", 4, "Single", function() return "Single, aim " .. State.aim .. " @ " .. State.dist .. "t: gain %" end,
+     " Single shot at the Aim and Dist knobs."},
+} do
+    local kind, field, name, title, note = blk[1], blk[2], blk[3], blk[4], blk[5]
+    local cols = {{"SB" .. kind, "D/AP", 5, "D/AP as is." .. note,
+                   function(w, c) local s = Sensitivity(w, c) return s and s.base[field] and MulDivRound(s.base[field], 1, 1000) end,
+                   fmt = Cents}}
+    if kind == "best" then
+        cols[#cols + 1] = {"SBmode", "Mode", 4, "Best mode as is: S single, B burst, A auto, then the aim level",
+                           function(w, c) local s = Sensitivity(w, c) return s and s.base[2] end, text = true}
+    end
+    for _, lever in ipairs(SensLevers) do
+        cols[#cols + 1] = {"S" .. lever[1] .. kind, lever[2], 6, lever[3] .. "." .. note .. sens_note,
+                           function(w, c) return SensDelta(w, c, lever[1], field) end, fmt = Permille}
+    end
+    Groups[#Groups + 1] = {"Sens" .. name, view = "sens", title = title, cols}
+end
+
 local Columns = {}
 for gi, g in ipairs(Groups) do
     State.collapsed[gi] = g.collapsed
@@ -845,7 +933,7 @@ local function Shown(col)
     return not col.shown or col.shown()
 end
 
-local CurveViews = {rounds = true, distance = true, stats = true, turn = true}
+local CurveViews = {rounds = true, distance = true, stats = true, turn = true, sens = true}
 
 -- curve views hide the always-on groups but Gun
 local function GroupShown(gi)
@@ -923,7 +1011,7 @@ local function Recompute(dlg)
         for i, id in ipairs(ids) do
             if dlg.window_state == "destroying" then return end
             rows[#rows + 1] = ComputeRow(id, ctx)
-            if i % (ctx.view == "stats" and 1 or 4) == 0 then
+            if i % ((ctx.view == "stats" or ctx.view == "sens") and 1 or 4) == 0 then
                 SetStatus(dlg, string.format("computing %d / %d ...", i, #ids))
                 Sleep(1)
             end
@@ -995,9 +1083,9 @@ local function Button(parent, text, on_press, props)
 end
 
 local Distances = {5, 10, 15, 20, 30}
-local Views = {"overview", "autofire", "rounds", "distance", "stats", "turn"}
+local Views = {"overview", "autofire", "rounds", "distance", "stats", "turn", "sens"}
 local ViewNames = {overview = "Overview", autofire = "Autofire", rounds = "D/AP by rounds", distance = "D/AP by distance",
-                   stats = "Stat leverage", turn = "Turn budget"}
+                   stats = "Stat leverage", turn = "Turn budget", sens = "Sensitivity"}
 local collapsed_w = 5 * char_w + 2 * cell_pad
 
 -- shows the view's groups and folds collapsed ones to a stub; shading alternates over the visible ones only
