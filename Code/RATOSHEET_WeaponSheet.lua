@@ -40,16 +40,21 @@ end
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
                view = "overview", aim = 3, dist = 10, auto = 3, stance_ap = true, collapsed = {}}
 
+local function RecoilComps()
+    return IsACHTActive() and Rat_RecoilComponentsACTH() or const.Combat.Recoil.Components
+end
+
 local function Recoil(w, unit)
-    local recoil = GetWepRecoil(w, unit, true) * GetCaliberStrRecoil(w, unit or FullStats)
-    if unit then recoil = recoil * GetRecoilOther(w, unit, false) end
+    local comps = RecoilComps()
+    local recoil = GetWepRecoil(w, unit, true, comps) * GetCaliberStrRecoil(w, unit or FullStats)
+    if unit then recoil = recoil * GetRecoilOther(w, unit, false, nil, comps) end
     return cRound(recoil * 100)
 end
 
 local function ModeRecoil(w, unit, delta_prop, bump)
     local net = MulDivRound(Recoil(w, unit), w[delta_prop] or 100, 100)
     if bump and w:HasComponent("recoil_bump") then
-        net = cRound(net * const.Combat.Recoil.Components.RecoilBumpMul)
+        net = cRound(net * (Rat_FactoryRecoilEffects(w).recoil_bump and const.Combat.Recoil.Components or RecoilComps()).RecoilBumpMul)
     end
     if unit and unit:HasStatusEffect("AutoWeapons") then
         net = cRound(net * const.Combat.Recoil.Perks.AutoWeaponsMul)
