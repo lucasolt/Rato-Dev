@@ -8,7 +8,9 @@ local cell_style = "PDAIMPContentTextSmall"
 local char_w, cell_pad = 8, 3
 
 -- default shooter when no merc is selected: a typical merc, not a perfect one (stat 100 saturated every hit chance)
-local DefaultStats = {placeholder = true, Marksmanship = 80, Dexterity = 80, Agility = 80, Strength = 80, Wisdom = 80, Explosives = 80}
+local default_stat = 85
+local DefaultStats = {placeholder = true, Marksmanship = default_stat, Dexterity = default_stat, Agility = default_stat,
+                      Strength = default_stat, Wisdom = default_stat, Explosives = default_stat}
 local ClassOrder = {"AssaultRifle", "SubmachineGun", "MachineGun", "SniperRifle", "Rifle", "Shotgun", "Pistol", "Revolver"}
 local ClassShort = {AssaultRifle = "Rifle", SubmachineGun = "SMG", MachineGun = "MG", SniperRifle = "SR", Rifle = "Rifle",
                     Shotgun = "SG", Pistol = "Pistol", Revolver = "Rev"}
@@ -41,7 +43,7 @@ local function Shooter(weapon, owner, stance)
     return s
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stat = 80, stance = 1, filter = "", no_scope = true,
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stat = default_stat, stance = 1, filter = "", no_scope = true,
                no_bipod = false, view = "overview", aim = 3, dist = 15, auto = 3, stance_ap = true, collapsed = {}}
 
 local function SetDefaultStats(v)
@@ -50,7 +52,7 @@ local function SetDefaultStats(v)
     end
 end
 
--- shooter knob cycle: stat 80 -> stat 100 -> selected merc
+-- shooter knob cycle: default stat -> stat 100 -> selected merc
 local function ShooterLabel()
     return State.merc and "Shooter: selected merc" or ("Shooter: stat " .. State.stat)
 end
@@ -909,7 +911,8 @@ local function ComputeRow(id, ctx)
 end
 
 -- skins and variants of a gun already listed
-local Duplicates = {Type56B_1 = true, Type56C_1 = true, Type56D_1 = true, HK23ECamo_1 = true, Papovka2SKS_1 = true}
+local Duplicates = {Type56B_1 = true, Type56C_1 = true, Type56D_1 = true, HK23ECamo_1 = true, Papovka2SKS_1 = true,
+                    Galil_FlagHill = true}
 
 local function Ids()
     local ids = {}
@@ -1262,17 +1265,17 @@ local function Build()
     local merc_btn
     merc_btn = Button(bar, "", function()
         if State.merc then
-            State.merc, State.stat = false, 80
-        elseif State.stat == 80 then
+            State.merc, State.stat = false, default_stat
+        elseif State.stat == default_stat then
             State.stat = 100
         else
             State.merc = true
         end
         SetDefaultStats(State.stat)
-        Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= 80, KnobColors.merc)
+        Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= default_stat, KnobColors.merc)
         MarkPending(dlg)
-    end, {RolloverText = Untranslated("Stat 80 = a typical merc in every stat; stat 100 = a perfect one; the selected merc uses their own")})
-    Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= 80, KnobColors.merc)
+    end, {RolloverText = Untranslated("Stat " .. default_stat .. " = a typical merc in every stat; stat 100 = a perfect one; the selected merc uses their own")})
+    Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= default_stat, KnobColors.merc)
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
