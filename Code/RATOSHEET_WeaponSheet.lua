@@ -38,8 +38,19 @@ local function Shooter(weapon, owner, stance)
     return s
 end
 
-local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
-               view = "overview", aim = 3, dist = 15, auto = 3, stance_ap = true, collapsed = {}}
+local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stat = 80, stance = 1, filter = "", no_scope = true,
+               no_bipod = false, view = "overview", aim = 3, dist = 15, auto = 3, stance_ap = true, collapsed = {}}
+
+local function SetDefaultStats(v)
+    for k in pairs(DefaultStats) do
+        if k ~= "placeholder" then DefaultStats[k] = v end
+    end
+end
+
+-- shooter knob cycle: stat 80 -> stat 100 -> selected merc
+local function ShooterLabel()
+    return State.merc and "Shooter: selected merc" or ("Shooter: stat " .. State.stat)
+end
 
 local function RecoilComps()
     return IsACHTActive() and Rat_RecoilComponentsACTH() or const.Combat.Recoil.Components
@@ -1013,7 +1024,8 @@ local function Render(dlg)
     end
     SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s%s", #rows, #(State.rows or empty_table),
         Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
-        State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 80") or "stat 80",
+        State.merc and (SelectedUnit() and SelectedUnit().session_id or ("no merc selected -> stat " .. State.stat)) or
+            ("stat " .. State.stat),
         Stances[State.stance], SelectedUnit() and "" or " | select a merc to price AP"))
 end
 
@@ -1226,11 +1238,18 @@ local function Build()
     Knob(cls_btn, "Class: " .. (State.cls or "all"), State.cls, KnobColors.class)
     local merc_btn
     merc_btn = Button(bar, "", function()
-        State.merc = not State.merc
-        Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 80", State.merc, KnobColors.merc)
+        if State.merc then
+            State.merc, State.stat = false, 80
+        elseif State.stat == 80 then
+            State.stat = 100
+        else
+            State.merc = true
+        end
+        SetDefaultStats(State.stat)
+        Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= 80, KnobColors.merc)
         MarkPending(dlg)
-    end, {RolloverText = Untranslated("Stat 80 = a typical merc in every stat; the selected merc uses their own")})
-    Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 80", State.merc, KnobColors.merc)
+    end, {RolloverText = Untranslated("Stat 80 = a typical merc in every stat; stat 100 = a perfect one; the selected merc uses their own")})
+    Knob(merc_btn, ShooterLabel(), State.merc or State.stat ~= 80, KnobColors.merc)
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
