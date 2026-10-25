@@ -7,7 +7,8 @@ local group_gap = 8
 local cell_style = "PDAIMPContentTextSmall"
 local char_w, cell_pad = 8, 3
 
-local FullStats = {placeholder = true, Marksmanship = 100, Dexterity = 100, Agility = 100, Strength = 100}
+-- default shooter when no merc is selected: a typical merc, not a perfect one (stat 100 saturated every hit chance)
+local DefaultStats = {placeholder = true, Marksmanship = 80, Dexterity = 80, Agility = 80, Strength = 80, Wisdom = 80, Explosives = 80}
 local ClassOrder = {"AssaultRifle", "SubmachineGun", "MachineGun", "SniperRifle", "Rifle", "Shotgun", "Pistol", "Revolver"}
 local ClassShort = {AssaultRifle = "Rifle", SubmachineGun = "SMG", MachineGun = "MG", SniperRifle = "SR", Rifle = "Rifle",
                     Shotgun = "SG", Pistol = "Pistol", Revolver = "Rev"}
@@ -22,7 +23,7 @@ end
 
 -- HintChartShooter: a stand-in Unit the aperture and recoil chains accept
 local function Shooter(weapon, owner, stance)
-    local src = owner or FullStats
+    local src = owner or DefaultStats
     local s = {placeholder = false, stance = stance}
     for _, k in ipairs{"Marksmanship", "Dexterity", "Agility", "Strength", "Wisdom", "Explosives"} do
         s[k] = src[k] or 100
@@ -38,7 +39,7 @@ local function Shooter(weapon, owner, stance)
 end
 
 local State = {rows = false, sort = "Cls", desc = false, cls = false, merc = false, stance = 1, filter = "", no_scope = true, no_bipod = false,
-               view = "overview", aim = 3, dist = 10, auto = 3, stance_ap = true, collapsed = {}}
+               view = "overview", aim = 3, dist = 15, auto = 3, stance_ap = true, collapsed = {}}
 
 local function RecoilComps()
     return IsACHTActive() and Rat_RecoilComponentsACTH() or const.Combat.Recoil.Components
@@ -46,7 +47,7 @@ end
 
 local function Recoil(w, unit)
     local comps = RecoilComps()
-    local recoil = GetWepRecoil(w, unit, true, comps) * GetCaliberStrRecoil(w, unit or FullStats)
+    local recoil = GetWepRecoil(w, unit, true, comps) * GetCaliberStrRecoil(w, unit or DefaultStats)
     if unit then recoil = recoil * GetRecoilOther(w, unit, false, nil, comps) end
     return cRound(recoil * 100)
 end
@@ -93,7 +94,7 @@ local function Aim(w, unit)
 end
 
 local function StanceAP(w, unit)
-    unit = unit or FullStats
+    unit = unit or DefaultStats
     return MulDivRound(GetWeapon_StanceAP(unit, w, true), 1, const.Scale.AP) + MulDivRound(Get_AimCost(unit), 1, const.Scale.AP)
 end
 
@@ -596,7 +597,7 @@ Groups[#Groups + 1] = {"Dex drivers", view = "stats", {
 }}
 Groups[#Groups + 1] = {"Str drivers", view = "stats", {
     {"LvBP", "StrBP", 5, "Caliber Strength breakpoint: below it the recoil control falls off fast", function(w) return (Recoil_StrBreakpoint(w)) end},
-    {"LvKick", "Kick", 4, "Single kick at Strength 100 (x100): the gun's own push", function(w) return Recoil(w) end, lower = true},
+    {"LvKick", "Kick", 4, "Single kick at Strength 80 (x100): the gun's own push", function(w) return Recoil(w) end, lower = true},
     {"LvWgt", "Wgt", 4, "weigth_held_mul (pivot A.HeldPivot)", function(w) return w.weigth_held_mul end,
      lower = true, prop = "weigth_held_mul"},
     {"LvHeld", "Held", 4, "Held-weight share of the base shooter's cone: closes at a fixed Hand-Eye, only Strength lifts it",
@@ -1012,7 +1013,7 @@ local function Render(dlg)
     end
     SetStatus(dlg, string.format("%d/%d guns | %s %s | %s, %s%s", #rows, #(State.rows or empty_table),
         Columns[table.find(Columns, 1, State.sort)].label, State.desc and "desc" or "asc",
-        State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 100") or "stat 100",
+        State.merc and (SelectedUnit() and SelectedUnit().session_id or "no merc selected -> stat 80") or "stat 80",
         Stances[State.stance], SelectedUnit() and "" or " | select a merc to price AP"))
 end
 
@@ -1226,10 +1227,10 @@ local function Build()
     local merc_btn
     merc_btn = Button(bar, "", function()
         State.merc = not State.merc
-        Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
+        Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 80", State.merc, KnobColors.merc)
         MarkPending(dlg)
-    end, {RolloverText = Untranslated("Stat 100 = the gun alone, like the rollover's grey bracket")})
-    Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 100", State.merc, KnobColors.merc)
+    end, {RolloverText = Untranslated("Stat 80 = a typical merc in every stat; the selected merc uses their own")})
+    Knob(merc_btn, State.merc and "Shooter: selected merc" or "Shooter: stat 80", State.merc, KnobColors.merc)
     local stance_btn
     stance_btn = Button(bar, "", function()
         State.stance = State.stance % #Stances + 1
