@@ -14,9 +14,12 @@ local ClassShort = {AssaultRifle = "Rifle", SubmachineGun = "SMG", MachineGun = 
                     Shotgun = "SG", Pistol = "Pistol", Revolver = "Rev"}
 local Stances = {"Standing", "Crouch", "Prone"}
 
+-- GBO reclassifies through object_class (Winchester -> AssaultRifle) without touching the parents; may name a donor gun
 local function WeaponClass(w)
+    local oc = g_Classes[w.object_class or false]
+    local src = IsKindOf(oc, "Firearm") and oc or w
     for _, c in ipairs(ClassOrder) do
-        if IsKindOf(w, c) then return c end
+        if IsKindOf(src, c) then return c end
     end
     return "Other"
 end
