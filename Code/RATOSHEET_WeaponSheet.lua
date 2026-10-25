@@ -420,6 +420,26 @@ for _, n in ipairs(AutoRounds) do
     auto_rounds[#auto_rounds + 1] = {"CR" .. n, tostring(n), curve_w, "Autofire, " .. n .. " rounds; blank past the magazine",
         function(w, c) return (w.MagazineSize or 0) >= n and DAP(Stats(w, c, "auto", n, State.dist)) or nil end, fmt = Cents}
 end
+
+-- mean D/AP of the longer strings over the 3-round D/AP, and the string length with the best D/AP
+local function StringGain(w, c)
+    local base = DAP(Stats(w, c, "auto", AutoRounds[1], State.dist))
+    if not base or base <= 0 then return end
+    local sum, cnt, best, best_n = 0, 0, base, AutoRounds[1]
+    for i = 2, #AutoRounds do
+        local n = AutoRounds[i]
+        local v = (w.MagazineSize or 0) >= n and DAP(Stats(w, c, "auto", n, State.dist))
+        if v then
+            sum, cnt = sum + MulDivRound(v, 100, base), cnt + 1
+            if v > best then best, best_n = v, n end
+        end
+    end
+    return cnt > 0 and MulDivRound(sum, 1, cnt) or nil, best_n
+end
+auto_rounds[#auto_rounds + 1] = {"CRGain", "Gain", 5, "Mean D/AP of the 4-20 round strings over the 3-round D/AP (magazine permitting): "
+    .. "above 1 a longer string pays, below 1 it wastes rounds", function(w, c) return (StringGain(w, c)) end, fmt = Cents}
+auto_rounds[#auto_rounds + 1] = {"CRPeak", "Pk", 3, "String length with the best D/AP",
+    function(w, c) return select(2, StringGain(w, c)) end, text = true}
 Groups[#Groups + 1] = {"Rounds", view = "rounds", title = function() return "Single / burst @ " .. State.dist .. " tiles" end, by_rounds}
 Groups[#Groups + 1] = {"AutoRounds", view = "rounds", title = function() return "Autofire D/AP by rounds @ " .. State.dist .. " tiles" end,
                        auto_rounds}
