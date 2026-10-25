@@ -82,7 +82,7 @@ local function HipSnap(w, aim, unit, shooter)
     end
     -- bulk (negative Handling) under BasePrecisionModel
     mul = MulDivRound(mul, Rat_HandlingBulkStepMul(w, unit), 1000)
-    return unit and MulDivRound(mul, Rat_StepAttrMul(unit, nil, aim), 100) or mul
+    return unit and MulDivRound(mul, Rat_StepAttrMul(unit, nil, aim, nil, w), 100) or mul
 end
 
 local function HandEyeScale(unit)
