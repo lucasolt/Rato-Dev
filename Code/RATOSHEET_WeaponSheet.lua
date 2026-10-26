@@ -14,6 +14,7 @@ local DefaultStats = {placeholder = true, Marksmanship = default_stat, Dexterity
 local ClassOrder = {"AssaultRifle", "SubmachineGun", "MachineGun", "SniperRifle", "Rifle", "Shotgun", "Pistol", "Revolver"}
 local ClassShort = {AssaultRifle = "Rifle", SubmachineGun = "SMG", MachineGun = "MG", SniperRifle = "SR", Rifle = "Rifle",
                     Shotgun = "SG", Pistol = "Pistol", Revolver = "Rev"}
+local ClassFilterGroup = {Pistol = "Handgun", Rev = "Handgun"}
 local Stances = {"Standing", "Crouch", "Prone"}
 
 -- GBO reclassifies through object_class (Winchester -> AssaultRifle) without touching the parents; may name a donor gun
@@ -1005,7 +1006,7 @@ local function VisibleRows()
     local filter = string.lower(State.filter or "")
     for _, r in ipairs(State.rows or empty_table) do
         local key = string.lower(r.Id .. " " .. (r.Name or "") .. " " .. (r.Cal or ""))
-        if (not State.cls or r.Cls == State.cls) and (filter == "" or key:find(filter, 1, true)) then
+        if (not State.cls or (ClassFilterGroup[r.Cls] or r.Cls) == State.cls) and (filter == "" or key:find(filter, 1, true)) then
             list[#list + 1] = r
         end
     end
@@ -1296,7 +1297,7 @@ local function Build()
         local r = XEdit.OnShortcut(self, shortcut, source, ...)
         return r or (#shortcut == 1 and "break") or nil
     end
-    local cls_list = {false, "Rifle", "SMG", "MG", "SR", "SG", "Pistol", "Rev"}
+    local cls_list = {false, "Rifle", "SMG", "MG", "SR", "SG", "Handgun"}
     local cls_btn
     cls_btn = Button(bar, "Class: all", function()
         local i = (table.find(cls_list, State.cls) or 1) % #cls_list + 1
