@@ -122,9 +122,24 @@ local function AttackAP(w, unit)
     return MulDivRound(ap, 1, const.Scale.AP)
 end
 
+-- shotguns fire their buckshot attacks; SingleShot/BurstFire in their lists are the slug fallbacks
+local function PelletGun(w)
+    local attacks = w.AvailableAttacks or empty_table
+    return IsKindOf(w, "Shotgun") and (table.find(attacks, "Buckshot") or table.find(attacks, "BuckshotBurst")) and true
+end
+
+local function HasAttack(w, id)
+    return table.find(w.AvailableAttacks or empty_table, id) and CombatActions[id] or nil
+end
+
 local function BurstModes(w)
-    local burst = table.find(w.AvailableAttacks or empty_table, "BurstFire") and Rat_HasSelectiveBurst(w) and
-                      not (IsKindOf(w, "AR15") and not w:HasComponent("Enable_BurstFire"))
+    local burst
+    if PelletGun(w) then
+        burst = HasAttack(w, "BuckshotBurst")
+    else
+        burst = table.find(w.AvailableAttacks or empty_table, "BurstFire") and Rat_HasSelectiveBurst(w) and
+                    not (IsKindOf(w, "AR15") and not w:HasComponent("Enable_BurstFire"))
+    end
     return burst and true or false, Rat_HasVariableAuto(w) and true or false
 end
 
@@ -137,14 +152,39 @@ local function Theta(tiles)
     return Rat_ThetaTarget(tiles * const.SlabSizeX, const.Combat.Aperture.Silhouette.Standing)
 end
 
-local function ConeCTH(w, shooter, aim, tiles)
+local function ConeCTH(w, shooter, aim, tiles, action)
     local a = const.Combat.Aperture
-    return Clamp(Rat_RayleighCTH(Theta(tiles), Sigma(w, shooter, nil, aim)), a.MinCTH, a.MaxCTH)
+    return Clamp(Rat_RayleighCTH(Theta(tiles), Sigma(w, shooter, action, aim)), a.MinCTH, a.MaxCTH)
+end
+
+-- standing Male, torso aimed, seen from the front: Rat_TargetExtents' box in mm (measured 2026-10-25, before BodyFill)
+local TorsoBox = {up = 447, down = 1002, right = 386, left = 261}
+
+-- expected pellets on the target per shell x100 when the main pellet hits (Rat_ExpectedPelletsOnTarget without a unit)
+local function ShellPellets(w, action, tiles)
+    local pellets = w:GetNumPellets(nil, action.id) or 0
+    if pellets <= 1 or IsSlugLoaded(w) then return Max(1, pellets) * 100 end
+    local dist = tiles * const.SlabSizeX
+    local fill = const.Combat.Aperture.BodyFill.Standing
+    local function arcmin(mm) return Max(1, MulDivRound(MulDivRound(mm, fill, 100), 3438, dist)) end
+    return Rat_PelletsInsideExtents(w, pellets, w.BuckshotConeAngle, arcmin(TorsoBox.up), arcmin(TorsoBox.down),
+                                    arcmin(TorsoBox.right), arcmin(TorsoBox.left))
 end
 
 -- the attack each fire mode stands for; autofire at auto_n rounds, capped by the magazine
 local function ModeAction(w, kind, auto_n)
     local burst, auto = BurstModes(w)
+    if PelletGun(w) then
+        -- the double barrel's both-barrels attack fills the burst slot: one main pellet, twice the pellets
+        if kind == "single" then
+            return HasAttack(w, "Buckshot"), 1
+        elseif kind == "burst" then
+            local action = HasAttack(w, "BuckshotBurst")
+            if action then return action, w:GetAutofireShots(action) end
+            return HasAttack(w, "DoubleBarrel"), 1
+        end
+        return nil
+    end
     if kind == "single" then
         return not w.AutoFireOnly and CombatActions.SingleShot, 1
     elseif kind == "burst" then
@@ -209,8 +249,9 @@ local function Stats(w, c, kind, n, dist, aim)
     if not action then return end
     local a = const.Combat.Aperture
     local sum = 0
-    if kind == "single" then
-        sum = ConeCTH(w, c.shooter, aim, dist)
+    local pellet = PelletGun(w)
+    if shots <= 1 then
+        sum = ConeCTH(w, c.shooter, aim, dist, pellet and action or nil)
     else
         local prof = Rat_RecoilProfile(c.shooter, action, w, shots)
         if not prof then return end
@@ -222,6 +263,8 @@ local function Stats(w, c, kind, n, dist, aim)
             sum = sum + Clamp(est.cth[i] or 0, a.MinCTH, a.MaxCTH)
         end
     end
+    -- shotguns count pellets: the main pellet's hit chance x the pellets that follow it onto the target
+    if pellet then sum = MulDivRound(sum, ShellPellets(w, action, dist), 100) end
     -- GetAPCost adds the aim levels; out of combat it prices the shooting stance at 0, so the Stance AP knob adds it
     local ap = c.ap_unit and action:GetAPCost(c.ap_unit, {weapon = w, aim = aim})
     ap = ap and ap > 0 and MulDivRound(ap, 1, const.Scale.AP) or nil
@@ -288,7 +331,7 @@ local Groups = {
         {"Cal", "Caliber", 8, "Caliber", function(w) return w.Caliber or "" end, text = true},
     }},
     {"Damage", {
-        {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded", function(w) return w.Damage end, hide_in = NotAuto},
+        {"Dmg", "Dmg", 4, "Damage, Basic ammo loaded (per pellet on shotguns)", function(w) return w.Damage end, hide_in = NotAuto},
         {"Crit", "Crit", 4, "CritChance, Basic ammo loaded", function(w) return w.CritChance end, prop = "CritChance"},
         {"CPA", "C/Aim", 4, "Crit chance per aim level (Rat_WeaponCritPerAim x Hand-Eye)",
          function(w, c) return MulDivRound(Rat_WeaponCritPerAim(w), c.unit and rGetHandEyeCoordination(c.unit) or 100, 100) end,
@@ -365,15 +408,15 @@ local Groups = {
     {"Single", view = "autofire", {
         {"SCrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
          function(w, c) return Field(w, c, "single", "crit") end},
-        {"SDmg", "Dmg", 4, "Expected damage of one shot: hit chance x Damage x (1 + crit x crit damage); no armor",
+        {"SDmg", "Dmg", 4, "Expected damage of one shot: hit chance x Damage x (1 + crit x crit damage); no armor. Shotguns: Buckshot, x the pellets expected on a standing torso",
          function(w, c) return Field(w, c, "single", "dmg") end},
         {"S1AP", "AP", 4, "AP: attack + shooting stance + aim levels (selected merc prices it)",
          function(w, c) return Field(w, c, "single", "ap") end, lower = true},
         {"SDAP", "D/AP", 5, "Expected damage per AP", function(w, c) return DmgPerAP(w, c, "single") end, fmt = Cents},
     }},
     {"Burst", view = "autofire", {
-        {"BRds", "Rds", 3, "Rounds per burst", function(w, c) return Field(w, c, "burst", "shots") end, text = true},
-        {"BHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk)",
+        {"BRds", "Rds", 3, "Rounds per burst; shotguns: buckshot burst, or the double barrel's both barrels (1)", function(w, c) return Field(w, c, "burst", "shots") end, text = true},
+        {"BHits", "Hits", 4, "Expected hits: sum of each round's hit chance (cone + recoil walk); pellets on shotguns",
          function(w, c) return Field(w, c, "burst", "sum") end, fmt = Hundredths},
         {"BCrit", "Crit", 4, "Crit chance at the sheet's aim: CritChance + CritPerAim x aim x Hand-Eye, fire-mode mul on the aimed part (no Settled, no spot scopes)",
          function(w, c) return Field(w, c, "burst", "crit") end},
