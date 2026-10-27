@@ -35,6 +35,7 @@ return PlaceObj('ModDef', {
 		"Code/RATOWEP_WeaponPicker.lua",
 		"Code/RATOSHEET_WeaponSheet.lua",
 		"Code/RATOWARD_Wardrobe.lua",
+		"UnitData/IMP_Rato.lua",
 	},
 	'default_options', {},
 	'saved', 1790727310,
