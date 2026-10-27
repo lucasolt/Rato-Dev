@@ -34,6 +34,7 @@ return PlaceObj('ModDef', {
 		"Code/RATOARENA_AIvsAI.lua",
 		"Code/RATOWEP_WeaponPicker.lua",
 		"Code/RATOSHEET_WeaponSheet.lua",
+		"Code/RATOWARD_Wardrobe.lua",
 	},
 	'default_options', {},
 	'saved', 1790727310,
