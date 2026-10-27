@@ -1,10 +1,12 @@
 -- Mix-and-match wardrobe: a per-merc AppearancePreset assembled from parts of existing presets, kept in the save.
 
--- [session_id] = {gender, base, prev, parts = {[slot] = {e = entity, c = color source preset, p = placement source preset}}}
+-- [session_id] = {gender, base, prev, parts = {[slot] = part}}
+-- part = {e = entity, c = color source preset, p = placement source preset} or baked {e, col, h, place}
 GameVar("gv_RatoWardrobe", {})
 
 local panel_id = "idRatoWardrobe"
 local preset_group = "RatoWardrobe"
+local storage_key = "rat_wardrobe_looks"
 local slots = {"Body", "Head", "Hair", "Hat", "Hat2", "Shirt", "Pants", "Armor", "Chest", "Hip"}
 local required = {Body = true, Head = true}
 local placement = {
@@ -15,6 +17,10 @@ local placement = {
     Hip = {"HipSpot"},
 }
 local hair_params = {"HairParam1", "HairParam2", "HairParam3", "HairParam4"}
+local color_fields = {}
+for i = 1, 3 do
+    table.iappend(color_fields, {"EditableColor" .. i, "EditableRoughness" .. i, "EditableMetallic" .. i})
+end
 
 local catalog
 
@@ -24,19 +30,38 @@ local function PresetGender(p)
     if IsKindOf(body, "CharacterBodyFemale") then return "Female" end
 end
 
-local function ColorKey(p, slot)
-    local cs = p[slot .. "Color"]
+local function ColorToRaw(cs)
     if not cs then return end
+    local r = {ColorizationPalette = cs.ColorizationPalette}
+    for _, f in ipairs(color_fields) do r[f] = cs[f] end
+    return r
+end
+
+local function RawToColor(r)
+    local cs = ColorizationPropSet:new({})
+    for _, f in ipairs(color_fields) do
+        if r[f] then cs:SetProperty(f, r[f]) end
+    end
+    cs.ColorizationPalette = r.ColorizationPalette
+    return cs
+end
+
+local function HairOf(p)
+    local h = {}
+    for i, f in ipairs(hair_params) do h[i] = p[f] end
+    return h
+end
+
+local function RawKey(col, h)
+    if not col then return end
     local k = {}
-    for i = 1, 3 do
-        k[#k + 1] = tostring(cs["EditableColor" .. i])
-        k[#k + 1] = tostring(cs["EditableMetallic" .. i])
-        k[#k + 1] = tostring(cs["EditableRoughness" .. i])
-    end
-    if slot == "Hair" then
-        for _, f in ipairs(hair_params) do k[#k + 1] = tostring(p[f]) end
-    end
+    for _, f in ipairs(color_fields) do k[#k + 1] = tostring(col[f]) end
+    for i = 1, #hair_params do k[#k + 1] = tostring(h and h[i]) end
     return table.concat(k, ",")
+end
+
+local function ColorKey(p, slot)
+    return RawKey(ColorToRaw(p[slot .. "Color"]), slot == "Hair" and HairOf(p) or nil)
 end
 
 local function BuildCatalog()
@@ -84,26 +109,43 @@ local function PresetId(id)
     return "RatoWardrobe_" .. id
 end
 
-local function BuildPreset(id, spec)
-    local pid = PresetId(id)
-    local t = {id = pid, group = preset_group}
+local function PartColor(s, slot)
+    if s.col then return s.col, s.h end
+    local cp = AppearancePresets[s.c] or AppearancePresets[s.p]
+    if not cp then return end
+    return ColorToRaw(cp[slot .. "Color"]), slot == "Hair" and HairOf(cp) or nil
+end
+
+local function PartPlace(s, slot)
+    if s.place then return s.place end
+    local sp = AppearancePresets[s.p]
+    local r = {}
+    for _, f in ipairs(placement[slot] or empty_table) do r[f] = sp and sp[f] end
+    return r
+end
+
+local function PresetProps(id, group, parts)
+    local t = {id = id, group = group}
     for _, slot in ipairs(slots) do
-        local s = spec.parts[slot]
-        local e = s and s.e or ""
-        t[slot] = e
-        if e ~= "" then
-            local cp = AppearancePresets[s.c] or AppearancePresets[s.p]
-            t[slot .. "Color"] = cp and cp[slot .. "Color"] or nil
-            local sp = AppearancePresets[s.p]
-            for _, f in ipairs(placement[slot] or empty_table) do t[f] = sp and sp[f] or nil end
-            if slot == "Hair" and cp then
-                for _, f in ipairs(hair_params) do t[f] = cp[f] end
+        local s = parts[slot]
+        t[slot] = s and s.e or ""
+        if s then
+            local col, h = PartColor(s, slot)
+            t[slot .. "Color"] = col and RawToColor(col) or nil
+            for f, v in pairs(PartPlace(s, slot)) do t[f] = v end
+            if slot == "Hair" and h then
+                for i, f in ipairs(hair_params) do t[f] = h[i] end
             end
         end
     end
+    return t
+end
+
+local function BuildPreset(id, spec)
+    local pid = PresetId(id)
     local old = AppearancePresets[pid]
     if old then old:delete() end
-    AppearancePreset:new(t):Register()
+    AppearancePreset:new(PresetProps(pid, preset_group, spec.parts)):Register()
     return pid
 end
 
@@ -171,14 +213,102 @@ function OnMsg.ModsReloaded()
     catalog = nil
 end
 
+-- Looks: plain-value copies of a spec, independent of the presets they were picked from.
+
+local function Bake(spec, name)
+    local parts = {}
+    for slot, s in pairs(spec.parts) do
+        local col, h = PartColor(s, slot)
+        parts[slot] = {e = s.e, col = col, h = h, place = placement[slot] and PartPlace(s, slot) or nil}
+    end
+    return {name = name, gender = spec.gender, parts = parts}
+end
+
+-- Turns a PlaceObj props list (pairs, map or both) into a map.
+local function PropsMap(props)
+    local m = {}
+    for k, v in pairs(props or empty_table) do
+        if type(k) ~= "number" then m[k] = v end
+    end
+    for i = 1, #(props or empty_table) - 1, 2 do m[props[i]] = props[i + 1] end
+    return m
+end
+
+local function LookFromPresetProps(m)
+    local gender = PresetGender(m)
+    if not gender then return end
+    local parts = {}
+    for _, slot in ipairs(slots) do
+        local e = m[slot]
+        if e and e ~= "" then
+            local cw = m[slot .. "Color"]
+            local place = {}
+            for _, f in ipairs(placement[slot] or empty_table) do place[f] = m[f] end
+            parts[slot] = {
+                e = e,
+                col = type(cw) == "table" and PropsMap(cw.props) or nil,
+                h = slot == "Hair" and HairOf(m) or nil,
+                place = placement[slot] and place or nil,
+            }
+        end
+    end
+    return {name = m.id or "pasted", gender = gender, parts = parts}
+end
+
+-- Accepts a copied look or a ModItemAppearancePreset / AppearancePreset block (e.g. from another mod's items.lua).
+local function ParseLook(text)
+    text = (text or ""):gsub("^[%s,]+", ""):gsub("[%s,]+$", "")
+    local env = {
+        RGBA = RGBA, RGB = RGB, point = point,
+        T = function(...) return "" end,
+        PlaceObj = function(class, props) return {class = class, props = props} end,
+    }
+    local err, v = LuaCodeToTuple(text, env)
+    if err or type(v) ~= "table" then return nil, "clipboard holds no look" end
+    if v.parts then return v end
+    if v.class == "ModItemAppearancePreset" or v.class == "AppearancePreset" then
+        local look = LookFromPresetProps(PropsMap(v.props))
+        if look then return look end
+    end
+    return nil, "clipboard holds no look"
+end
+
+local function SpecFromLook(spec, look)
+    if look.gender ~= spec.gender then
+        return string.format("look is %s, merc is %s", tostring(look.gender), spec.gender)
+    end
+    local parts, dropped = {}, 0
+    for slot, s in pairs(look.parts or empty_table) do
+        if table.find(slots, slot) and IsValidEntity(s.e) then
+            parts[slot] = table.copy(s, "deep")
+        else
+            dropped = dropped + 1
+        end
+    end
+    if not (parts.Body and parts.Head) then return "look has no valid body or head" end
+    spec.base, spec.parts = false, parts
+    return dropped > 0 and string.format("applied, %d missing parts skipped", dropped) or "applied " .. tostring(look.name)
+end
+
+local function Library()
+    CurrentModStorageTable[storage_key] = CurrentModStorageTable[storage_key] or {}
+    return CurrentModStorageTable[storage_key]
+end
+
+local function WriteLibrary()
+    local err = WriteModPersistentStorageTable()
+    return err and ("storage error: " .. tostring(err))
+end
+
 -- UI
 
-local function GetSpec(id)
+-- Only a change stores the spec, so viewing a merc leaves the save untouched.
+local function GetSpec(id, store)
     gv_RatoWardrobe = gv_RatoWardrobe or {}
     local spec = gv_RatoWardrobe[id]
     if spec then return spec end
     spec = SpecFromPreset(CurrentAppearance(id))
-    if not spec then return end
+    if not (spec and store) then return spec end
     local ud = gv_UnitData[id]
     spec.prev = ud and ud.ForcedAppearance or false
     gv_RatoWardrobe[id] = spec
@@ -201,13 +331,12 @@ local function SetPart(spec, slot, e)
     local g = Catalog(spec.gender)
     local src = g.src[slot] and g.src[slot][e]
     local old = spec.parts[slot]
-    spec.parts[slot] = {e = e, p = src, c = old and old.c or src}
+    spec.parts[slot] = {e = e, p = src, c = old and old.c or src, col = old and old.col, h = old and old.h}
 end
 
 local function ColorIndex(spec, slot)
     local s = spec.parts[slot]
-    local cp = s and AppearancePresets[s.c]
-    local key = cp and ColorKey(cp, slot)
+    local key = s and RawKey(PartColor(s, slot))
     local idx = Catalog(spec.gender).color_idx[slot]
     return key and idx and idx[key]
 end
@@ -218,7 +347,7 @@ local function StepColor(spec, slot, step)
     if not (s and list and #list > 0) then return end
     local n = #list
     local i = step == "rnd" and AsyncRand(n) + 1 or ((ColorIndex(spec, slot) or 1) - 1 + step) % n + 1
-    s.c = list[i]
+    s.c, s.col, s.h = list[i], nil, nil
 end
 
 local function Randomize(spec)
@@ -270,15 +399,20 @@ local function MakeText(parent, props)
     return XText:new(t, parent)
 end
 
+local function SetStatus(panel, text)
+    panel.idStatus:SetText(text or "")
+end
+
 local Refresh
 
 local function Change(panel, fn)
     local id = rawget(panel, "rat_unit")
-    local spec = id and GetSpec(id)
+    local spec = id and GetSpec(id, "store")
     if not spec then return end
-    fn(spec)
+    local msg = fn(spec)
     Commit(id)
     Refresh(panel)
+    if msg then SetStatus(panel, msg) end
 end
 
 local function BuildSlotRow(panel, body, slot)
@@ -307,18 +441,35 @@ local function BuildSlotRow(panel, body, slot)
     rawget(panel, "rat_labels")[slot] = MakeText(row, {MinWidth = 330})
 end
 
+local function LookName(panel, spec)
+    local typed = panel.idName:GetText()
+    if typed and typed ~= "" then return typed end
+    local id = rawget(panel, "rat_unit")
+    return string.format("%s %d", tostring(id), #Library() + 1)
+end
+
+local function RefreshLibrary(panel)
+    local lib = Library()
+    local i = Clamp(rawget(panel, "rat_lib_idx") or 1, 1, Max(#lib, 1))
+    rawset(panel, "rat_lib_idx", i)
+    local look = lib[i]
+    panel.idLib:SetText(look and string.format("%s  [%s]  (%d/%d)", tostring(look.name), tostring(look.gender), i, #lib)
+        or "no saved looks")
+end
+
 Refresh = function(panel)
     local id = rawget(panel, "rat_unit")
     local spec = id and GetSpec(id)
     local ud = id and gv_UnitData[id]
     panel.idMerc:SetText(id and string.format("%s%s", id, ud and IsImpUnit(ud) and "  (IMP)" or "") or "no hired merc")
+    RefreshLibrary(panel)
     if not spec then
         panel.idBase:SetText("")
         for _, label in pairs(rawget(panel, "rat_labels")) do label:SetText("") end
         return
     end
     local g = Catalog(spec.gender)
-    panel.idBase:SetText(string.format("%s  (%d/%d)  %s", spec.base or "-",
+    panel.idBase:SetText(string.format("%s  (%d/%d)  %s", spec.base or "custom",
         table.find(g.bases, spec.base) or 0, #g.bases, spec.gender))
     for slot, label in pairs(rawget(panel, "rat_labels")) do
         local s = spec.parts[slot]
@@ -331,13 +482,96 @@ Refresh = function(panel)
             label:SetText(string.format("-  (%d options)", #parts))
         end
     end
-    panel.idStatus:SetText(IsValid(g_Units[id]) and "" or "not on the map: the look applies when the merc spawns")
+    SetStatus(panel, IsValid(g_Units[id]) and "" or "not on the map: the look applies when the merc spawns")
 end
 
 local function SelectMerc(panel, step)
     local list = HiredMercs()
     rawset(panel, "rat_unit", Cycle(list, rawget(panel, "rat_unit"), step) or false)
     Refresh(panel)
+end
+
+local function BuildLookRows(panel)
+    local lib_row = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 4, Margins = box(0, 4, 0, 0)}, panel)
+    MakeText(lib_row, {MinWidth = 60, MaxWidth = 60}):SetText("Saved")
+    local function lib_step(step)
+        return function()
+            local n = #Library()
+            if n == 0 then return end
+            rawset(panel, "rat_lib_idx", ((rawget(panel, "rat_lib_idx") or 1) - 1 + step) % n + 1)
+            RefreshLibrary(panel)
+        end
+    end
+    MakeButton(lib_row, "<", lib_step(-1))
+    MakeButton(lib_row, ">", lib_step(1))
+    MakeButton(lib_row, "wear", function()
+        local look = Library()[rawget(panel, "rat_lib_idx") or 1]
+        if look then Change(panel, function(spec) return SpecFromLook(spec, look) end) end
+    end)
+    MakeButton(lib_row, "forget", function()
+        local lib, i = Library(), rawget(panel, "rat_lib_idx") or 1
+        local look = table.remove(lib, i)
+        if not look then return end
+        local err = WriteLibrary()
+        RefreshLibrary(panel)
+        SetStatus(panel, err or ("removed " .. tostring(look.name)))
+    end)
+    MakeText(lib_row, {Id = "idLib"})
+
+    local io_row = XWindow:new({LayoutMethod = "HList", LayoutHSpacing = 4}, panel)
+    local name = XEdit:new({
+        Id = "idName",
+        Hint = "look name",
+        Translate = false,
+        TextStyle = "SatelliteContextMenuText",
+        Background = RGBA(40, 40, 40, 255),
+        FocusedBackground = RGBA(55, 55, 55, 255),
+        Padding = box(4, 2, 4, 2),
+        MinWidth = 160,
+        MaxWidth = 160,
+    }, io_row)
+    -- Keep typed letters away from the game's single-key shortcuts.
+    name.OnShortcut = function(self, shortcut, source, ...)
+        if shortcut == "Escape" then self:SetFocus(false) return "break" end
+        local r = XEdit.OnShortcut(self, shortcut, source, ...)
+        return r or (#shortcut == 1 and "break") or nil
+    end
+    local function current_look()
+        local id = rawget(panel, "rat_unit")
+        local spec = id and GetSpec(id)
+        return spec and Bake(spec, LookName(panel, spec))
+    end
+    MakeButton(io_row, "Save look", function()
+        local look = current_look()
+        if not look then return end
+        local lib = Library()
+        lib[#lib + 1] = look
+        local err = WriteLibrary()
+        if err then table.remove(lib) end
+        rawset(panel, "rat_lib_idx", #lib)
+        RefreshLibrary(panel)
+        SetStatus(panel, err or ("saved " .. look.name .. " (all saves and campaigns)"))
+    end)
+    MakeButton(io_row, "Copy", function()
+        local look = current_look()
+        if not look then return end
+        -- A -1 limit makes CopyToClipboard do nothing; GetFromClipboard needs it to read past 1024 chars.
+        CopyToClipboard(TableToLuaCode(look))
+        SetStatus(panel, "look copied to the clipboard")
+    end)
+    MakeButton(io_row, "Paste", function()
+        local look, err = ParseLook(GetFromClipboard(-1))
+        if not look then return SetStatus(panel, err) end
+        Change(panel, function(spec) return SpecFromLook(spec, look) end)
+    end)
+    MakeButton(io_row, "Copy as preset", function()
+        local look = current_look()
+        if not look then return end
+        local pid = look.name:gsub("[^%w_]", "_")
+        local code = ValueToLuaCode(AppearancePreset:new(PresetProps(pid, "IMP", look.parts)))
+        CopyToClipboard((code:gsub("^PlaceObj%('AppearancePreset'", "PlaceObj('ModItemAppearancePreset'")))
+        SetStatus(panel, "ModItemAppearancePreset " .. pid .. " copied, for a mod's items.lua")
+    end)
 end
 
 local function Build(unit_id)
@@ -398,6 +632,7 @@ local function Build(unit_id)
         if id then RatoWardrobe_Revert(id) end
         Refresh(panel)
     end)
+    BuildLookRows(panel)
     MakeText(panel, {Id = "idStatus"}):SetTextColor(RGB(200, 180, 120))
 
     panel:Open()
