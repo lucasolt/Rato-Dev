@@ -121,6 +121,10 @@ return {
 		'name', "RATOWARD_Wardrobe",
 		'CodeFileName', "Code/RATOWARD_Wardrobe.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "Script4",
+		'CodeFileName', "Code/Script4.lua",
+	}),
 	PlaceObj('ModItemAppearancePreset', {
 		Armor = "",
 		Body = "Faction_Adonis_Top_Camo_03",

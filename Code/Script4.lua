@@ -1,0 +1,53 @@
+PlaceObj('ModItemAppearancePreset', {
+	Armor = "",
+	Body = "Faction_Adonis_Top_Camo_03",
+	BodyColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(115, 48, 27, 255),
+		'EditableColor2', RGBA(29, 31, 20, 255),
+		'EditableColor3', RGBA(15, 14, 14, 255),
+	}),
+	Chest = "Faction_Knife_01",
+	ChestColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(76, 90, 62, 255),
+		'EditableColor2', RGBA(17, 22, 13, 255),
+		'EditableColor3', RGBA(36, 42, 30, 255),
+	}),
+	Hair = "NPCMale_Hair_03",
+	HairColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(50, 31, 22, 255),
+		'EditableColor2', RGBA(19, 7, 1, 255),
+		'EditableRoughness2', 60,
+		'EditableMetallic2', -128,
+		'EditableRoughness3', 38,
+	}),
+	HairParam3 = 0,
+	Hat = "MilitiaCostumeMale_Mask_02",
+	Hat2 = "",
+	HatColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(77, 51, 26, 255),
+		'EditableColor2', RGBA(0, 0, 0, 255),
+		'EditableColor3', RGBA(0, 0, 0, 255),
+	}),
+	HatSpot = "Origin",
+	Head = "Male_Head_01",
+	HeadColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(0, 0, 0, 255),
+		'EditableColor2', RGBA(0, 0, 0, 255),
+		'EditableColor3', RGBA(0, 0, 0, 255),
+	}),
+	Hip = "Faction_Acc_Marksman",
+	HipColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(11, 8, 6, 255),
+		'EditableColor2', RGBA(11, 8, 6, 255),
+		'EditableColor3', RGBA(0, 0, 0, 255),
+	}),
+	Pants = "Faction_Adonis_Bottom_02",
+	PantsColor = PlaceObj('ColorizationPropSet', {
+		'EditableColor1', RGBA(9, 7, 7, 255),
+		'EditableColor2', RGBA(11, 17, 18, 255),
+		'EditableColor3', RGBA(0, 0, 0, 255),
+	}),
+	Shirt = "",
+	group = "IMP",
+	id = "IMP_Spec2_5",
+})

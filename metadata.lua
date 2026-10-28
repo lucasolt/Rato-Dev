@@ -3,7 +3,7 @@ return PlaceObj('ModDef', {
 	'dependencies', {},
 	'id', "WxLXvdc",
 	'author', "rato",
-	'version', 666,
+	'version', 667,
 	'lua_revision', 233360,
 	'saved_with_revision', 366685,
 	'code', {
@@ -35,10 +35,11 @@ return PlaceObj('ModDef', {
 		"Code/RATOWEP_WeaponPicker.lua",
 		"Code/RATOSHEET_WeaponSheet.lua",
 		"Code/RATOWARD_Wardrobe.lua",
+		"Code/Script4.lua",
 		"UnitData/IMP_Rato.lua",
 	},
 	'default_options', {},
-	'saved', 1790727310,
-	'code_hash', -1525879712916604733,
+	'saved', 1793071902,
+	'code_hash', 8478574402637422340,
 	'affected_resources', {},
 })
